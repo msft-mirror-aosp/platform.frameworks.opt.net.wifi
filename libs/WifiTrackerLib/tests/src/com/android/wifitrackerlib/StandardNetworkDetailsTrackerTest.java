@@ -35,6 +35,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.ConnectivityManager;
+import android.net.NetworkScoreManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
@@ -61,12 +62,18 @@ public class StandardNetworkDetailsTrackerTest {
     private static final long MAX_SCAN_AGE_MILLIS = 15_000;
     private static final long SCAN_INTERVAL_MILLIS = 10_000;
 
-    @Mock private WifiTrackerInjector mInjector;
-    @Mock private Lifecycle mMockLifecycle;
-    @Mock private Context mMockContext;
-    @Mock private WifiManager mMockWifiManager;
-    @Mock private ConnectivityManager mMockConnectivityManager;
-    @Mock private Clock mMockClock;
+    @Mock
+    private Lifecycle mMockLifecycle;
+    @Mock
+    private Context mMockContext;
+    @Mock
+    private WifiManager mMockWifiManager;
+    @Mock
+    private ConnectivityManager mMockConnectivityManager;
+    @Mock
+    private NetworkScoreManager mMockNetworkScoreManager;
+    @Mock
+    private Clock mMockClock;
 
     private TestLooper mTestLooper;
 
@@ -77,12 +84,10 @@ public class StandardNetworkDetailsTrackerTest {
             String key) {
         final Handler testHandler = new Handler(mTestLooper.getLooper());
 
-        return new StandardNetworkDetailsTracker(
-                mInjector,
-                mMockLifecycle,
-                mMockContext,
+        return new StandardNetworkDetailsTracker(mMockLifecycle, mMockContext,
                 mMockWifiManager,
                 mMockConnectivityManager,
+                mMockNetworkScoreManager,
                 testHandler,
                 testHandler,
                 mMockClock,
@@ -103,6 +108,8 @@ public class StandardNetworkDetailsTrackerTest {
         when(mMockWifiManager.getScanResults()).thenReturn(new ArrayList<>());
         when(mMockWifiManager.getWifiState()).thenReturn(WifiManager.WIFI_STATE_ENABLED);
         when(mMockClock.millis()).thenReturn(START_MILLIS);
+        when(mMockContext.getSystemService(Context.NETWORK_SCORE_SERVICE))
+                .thenReturn(mMockNetworkScoreManager);
     }
 
     /**
