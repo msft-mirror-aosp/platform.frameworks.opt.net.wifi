@@ -33,6 +33,7 @@ import static android.net.wifi.WifiInfo.SECURITY_TYPE_WEP;
 import static android.net.wifi.WifiInfo.sanitizeSsid;
 
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
+import static com.android.wifitrackerlib.Utils.getAverageSpeedFromScanResults;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
 import static com.android.wifitrackerlib.Utils.getConnectedDescription;
 import static com.android.wifitrackerlib.Utils.getConnectingDescription;
@@ -42,25 +43,24 @@ import static com.android.wifitrackerlib.Utils.getMeteredDescription;
 import static com.android.wifitrackerlib.Utils.getSecurityTypesFromScanResult;
 import static com.android.wifitrackerlib.Utils.getSecurityTypesFromWifiConfiguration;
 import static com.android.wifitrackerlib.Utils.getSingleSecurityTypeFromMultipleSecurityTypes;
+import static com.android.wifitrackerlib.Utils.getSpeedDescription;
+import static com.android.wifitrackerlib.Utils.getSpeedFromWifiInfo;
 import static com.android.wifitrackerlib.Utils.getVerboseLoggingDescription;
 
-import android.annotation.SuppressLint;
-import android.app.admin.DevicePolicyManager;
-import android.app.admin.WifiSsidPolicy;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
+import android.net.NetworkScoreManager;
+import android.net.NetworkScorerAppData;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.net.wifi.WifiSsid;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 import android.os.SystemClock;
-import android.os.UserHandle;
-import android.os.UserManager;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
@@ -70,15 +70,14 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
-import androidx.core.os.BuildCompat;
+
+import com.android.internal.annotations.VisibleForTesting;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -102,7 +101,6 @@ public class StandardWifiEntry extends WifiEntry {
 
     @NonNull private final StandardWifiEntryKey mKey;
 
-    @NonNull private final WifiTrackerInjector mInjector;
     @NonNull private final Context mContext;
 
     // Map of security type to matching scan results
@@ -121,48 +119,35 @@ public class StandardWifiEntry extends WifiEntry {
     private List<Integer> mTargetSecurityTypes = new ArrayList<>();
 
     private boolean mIsUserShareable = false;
+    @Nullable private String mRecommendationServiceLabel;
 
     private boolean mShouldAutoOpenCaptivePortal = false;
-
-    private boolean mIsAdminRestricted = false;
-    private boolean mHasAddConfigUserRestriction = false;
 
     private final boolean mIsWpa3SaeSupported;
     private final boolean mIsWpa3SuiteBSupported;
     private final boolean mIsEnhancedOpenSupported;
 
-    private final UserManager mUserManager;
-    private final DevicePolicyManager mDevicePolicyManager;
-
-    StandardWifiEntry(
-            @NonNull WifiTrackerInjector injector,
-            @NonNull Context context, @NonNull Handler callbackHandler,
+    StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull StandardWifiEntryKey key, @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) {
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
-        mInjector = injector;
+        super(callbackHandler, wifiManager, scoreCache, forSavedNetworksPage);
         mContext = context;
         mKey = key;
         mIsWpa3SaeSupported = wifiManager.isWpa3SaeSupported();
         mIsWpa3SuiteBSupported = wifiManager.isWpa3SuiteBSupported();
         mIsEnhancedOpenSupported = wifiManager.isEnhancedOpenSupported();
-        mUserManager = injector.getUserManager();
-        mDevicePolicyManager = injector.getDevicePolicyManager();
-        updateSecurityTypes();
-        if (BuildCompat.isAtLeastT()) {
-            updateAdminRestrictions();
-        }
+        updateRecommendationServiceLabel();
     }
 
-    StandardWifiEntry(
-            @NonNull WifiTrackerInjector injector,
-            @NonNull Context context, @NonNull Handler callbackHandler,
+    StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull StandardWifiEntryKey key,
             @Nullable List<WifiConfiguration> configs,
             @Nullable List<ScanResult> scanResults,
             @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        this(injector, context, callbackHandler, key, wifiManager,
+        this(context, callbackHandler, key, wifiManager, scoreCache,
                 forSavedNetworksPage);
         if (configs != null && !configs.isEmpty()) {
             updateConfig(configs);
@@ -188,10 +173,6 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public synchronized String getSummary(boolean concise) {
-        if (hasAdminRestrictions()) {
-            return mContext.getString(R.string.wifitrackerlib_admin_restricted_network);
-        }
-
         StringJoiner sj = new StringJoiner(mContext.getString(
                 R.string.wifitrackerlib_summary_separator));
 
@@ -199,7 +180,7 @@ public class StandardWifiEntry extends WifiEntry {
         final @ConnectedState int connectedState = getConnectedState();
         switch (connectedState) {
             case CONNECTED_STATE_DISCONNECTED:
-                connectedStateDescription = getDisconnectedDescription(mInjector, mContext,
+                connectedStateDescription = getDisconnectedDescription(mContext,
                         mTargetWifiConfig,
                         mForSavedNetworksPage,
                         concise);
@@ -211,6 +192,7 @@ public class StandardWifiEntry extends WifiEntry {
                 connectedStateDescription = getConnectedDescription(mContext,
                         mTargetWifiConfig,
                         mNetworkCapabilities,
+                        mRecommendationServiceLabel,
                         mIsDefaultNetwork,
                         mIsLowQuality);
                 break;
@@ -220,6 +202,11 @@ public class StandardWifiEntry extends WifiEntry {
         }
         if (!TextUtils.isEmpty(connectedStateDescription)) {
             sj.add(connectedStateDescription);
+        }
+
+        final String speedDescription = getSpeedDescription(mContext, this);
+        if (!TextUtils.isEmpty(speedDescription)) {
+            sj.add(speedDescription);
         }
 
         final String autoConnectDescription = getAutoConnectDescription(mContext, this);
@@ -308,9 +295,6 @@ public class StandardWifiEntry extends WifiEntry {
                 || getConnectedState() != CONNECTED_STATE_DISCONNECTED) {
             return false;
         }
-
-        if (hasAdminRestrictions()) return false;
-
         // Allow connection for EAP SIM dependent methods if the SIM of specified carrier ID is
         // active in the device.
         if (mTargetSecurityTypes.contains(SECURITY_TYPE_EAP) && mTargetWifiConfig != null
@@ -434,9 +418,8 @@ public class StandardWifiEntry extends WifiEntry {
         if (canSignIn()) {
             // canSignIn() implies that this WifiEntry is the currently connected network, so use
             // getCurrentNetwork() to start the captive portal app.
-            HiddenApiWrapper.startCaptivePortalApp(
-                    mContext.getSystemService(ConnectivityManager.class),
-                    mWifiManager.getCurrentNetwork());
+            ((ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+                    .startCaptivePortalApp(mWifiManager.getCurrentNetwork());
         }
     }
 
@@ -446,20 +429,7 @@ public class StandardWifiEntry extends WifiEntry {
      */
     @Override
     public synchronized boolean canShare() {
-        if (mInjector.isDemoMode()) {
-            return false;
-        }
-
-        WifiConfiguration wifiConfig = getWifiConfiguration();
-        if (wifiConfig == null) {
-            return false;
-        }
-
-        if (BuildCompat.isAtLeastT() && mUserManager.hasUserRestrictionForUser(
-                UserManager.DISALLOW_SHARING_ADMIN_CONFIGURED_WIFI,
-                UserHandle.getUserHandleForUid(wifiConfig.creatorUid))
-                && Utils.isDeviceOrProfileOwner(wifiConfig.creatorUid,
-                wifiConfig.creatorName, mContext)) {
+        if (getWifiConfiguration() == null) {
             return false;
         }
 
@@ -482,24 +452,11 @@ public class StandardWifiEntry extends WifiEntry {
      */
     @Override
     public synchronized boolean canEasyConnect() {
-        if (mInjector.isDemoMode()) {
-            return false;
-        }
-
-        WifiConfiguration wifiConfig = getWifiConfiguration();
-        if (wifiConfig == null) {
+        if (getWifiConfiguration() == null) {
             return false;
         }
 
         if (!mWifiManager.isEasyConnectSupported()) {
-            return false;
-        }
-
-        if (BuildCompat.isAtLeastT() && mUserManager.hasUserRestrictionForUser(
-                UserManager.DISALLOW_SHARING_ADMIN_CONFIGURED_WIFI,
-                UserHandle.getUserHandleForUid(wifiConfig.creatorUid))
-                && Utils.isDeviceOrProfileOwner(wifiConfig.creatorUid,
-                wifiConfig.creatorName, mContext)) {
             return false;
         }
 
@@ -729,6 +686,8 @@ public class StandardWifiEntry extends WifiEntry {
             mLevel = bestScanResult != null
                     ? mWifiManager.calculateSignalLevel(bestScanResult.level)
                     : WIFI_LEVEL_UNREACHABLE;
+            // Average speed is used to prevent speed label flickering from multiple APs.
+            mSpeed = getAverageSpeedFromScanResults(mScoreCache, mTargetScanResults);
         }
     }
 
@@ -742,6 +701,17 @@ public class StandardWifiEntry extends WifiEntry {
             mShouldAutoOpenCaptivePortal = false;
             signIn(null /* callback */);
         }
+    }
+
+    @WorkerThread
+    synchronized void onScoreCacheUpdated() {
+        if (mWifiInfo != null) {
+            mSpeed = getSpeedFromWifiInfo(mScoreCache, mWifiInfo);
+        } else {
+            // Average speed is used to prevent speed label flickering from multiple APs.
+            mSpeed = getAverageSpeedFromScanResults(mScoreCache, mTargetScanResults);
+        }
+        notifyOnUpdated();
     }
 
     @WorkerThread
@@ -879,6 +849,14 @@ public class StandardWifiEntry extends WifiEntry {
         return false;
     }
 
+    private synchronized void updateRecommendationServiceLabel() {
+        final NetworkScorerAppData scorer = ((NetworkScoreManager) mContext
+                .getSystemService(Context.NETWORK_SCORE_SERVICE)).getActiveScorer();
+        if (scorer != null) {
+            mRecommendationServiceLabel = scorer.getRecommendationServiceLabel();
+        }
+    }
+
     @NonNull
     static StandardWifiEntryKey ssidAndSecurityTypeToStandardWifiEntryKey(
             @NonNull String ssid, int security) {
@@ -953,66 +931,6 @@ public class StandardWifiEntry extends WifiEntry {
     @Override
     String getNetworkSelectionDescription() {
         return Utils.getNetworkSelectionDescription(getWifiConfiguration());
-    }
-
-    @SuppressLint("NewApi")
-    private void updateAdminRestrictions() {
-        if (mUserManager != null) {
-            mHasAddConfigUserRestriction = mUserManager.hasUserRestriction(
-                    UserManager.DISALLOW_ADD_WIFI_CONFIG);
-        }
-        if (mDevicePolicyManager != null) {
-            //check minimum security level restriction
-            int adminMinimumSecurityLevel =
-                    mDevicePolicyManager.getMinimumRequiredWifiSecurityLevel();
-            if (adminMinimumSecurityLevel != DevicePolicyManager.WIFI_SECURITY_OPEN) {
-                boolean securityRestrictionPassed = false;
-                for (int type : getSecurityTypes()) {
-                    int securityLevel = Utils.convertSecurityTypeToDpmWifiSecurity(type);
-
-                    // Skip unknown security type since security level cannot be determined.
-                    // If all the security types are unknown when the minimum security level
-                    // restriction is set, the device cannot connect to this network.
-                    if (securityLevel == Utils.DPM_SECURITY_TYPE_UNKNOWN) continue;
-
-                    if (adminMinimumSecurityLevel <= securityLevel) {
-                        securityRestrictionPassed = true;
-                        break;
-                    }
-                }
-                if (!securityRestrictionPassed) {
-                    mIsAdminRestricted = true;
-                    return;
-                }
-            }
-            //check SSID restriction
-            WifiSsidPolicy policy = mDevicePolicyManager.getWifiSsidPolicy();
-            if (policy != null) {
-                int policyType = policy.getPolicyType();
-                Set<WifiSsid> ssids = policy.getSsids();
-
-                if (policyType == WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_ALLOWLIST
-                        && !ssids.contains(
-                        WifiSsid.fromBytes(getSsid().getBytes(StandardCharsets.UTF_8)))) {
-                    mIsAdminRestricted = true;
-                    return;
-                }
-                if (policyType == WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_DENYLIST
-                        && ssids.contains(
-                        WifiSsid.fromBytes(getSsid().getBytes(StandardCharsets.UTF_8)))) {
-                    mIsAdminRestricted = true;
-                    return;
-                }
-            }
-        }
-    }
-
-    private boolean hasAdminRestrictions() {
-        if ((mHasAddConfigUserRestriction && !(isSaved() || isSuggestion()))
-                || mIsAdminRestricted) {
-            return true;
-        }
-        return false;
     }
 
     /**
