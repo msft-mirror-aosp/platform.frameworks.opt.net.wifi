@@ -26,7 +26,6 @@ import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkInfo;
-import android.net.NetworkScoreManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
@@ -39,6 +38,7 @@ import android.util.Pair;
 
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.lifecycle.Lifecycle;
 
@@ -62,14 +62,30 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
             @NonNull Context context,
             @NonNull WifiManager wifiManager,
             @NonNull ConnectivityManager connectivityManager,
-            @NonNull NetworkScoreManager networkScoreManager,
             @NonNull Handler mainHandler,
             @NonNull Handler workerHandler,
             @NonNull Clock clock,
             long maxScanAgeMillis,
             long scanIntervalMillis,
             String key) {
-        super(lifecycle, context, wifiManager, connectivityManager, networkScoreManager,
+        this(new WifiTrackerInjector(context), lifecycle, context, wifiManager, connectivityManager,
+                mainHandler, workerHandler, clock, maxScanAgeMillis, scanIntervalMillis, key);
+    }
+
+    @VisibleForTesting
+    PasspointNetworkDetailsTracker(
+            @NonNull WifiTrackerInjector injector,
+            @NonNull Lifecycle lifecycle,
+            @NonNull Context context,
+            @NonNull WifiManager wifiManager,
+            @NonNull ConnectivityManager connectivityManager,
+            @NonNull Handler mainHandler,
+            @NonNull Handler workerHandler,
+            @NonNull Clock clock,
+            long maxScanAgeMillis,
+            long scanIntervalMillis,
+            String key) {
+        super(injector, lifecycle, context, wifiManager, connectivityManager,
                 mainHandler, workerHandler, clock, maxScanAgeMillis, scanIntervalMillis, TAG);
 
         Optional<PasspointConfiguration> optionalPasspointConfig =
@@ -79,8 +95,8 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
                                 uniqueIdToPasspointWifiEntryKey(passpointConfig.getUniqueId())))
                         .findAny();
         if (optionalPasspointConfig.isPresent()) {
-            mChosenEntry = new PasspointWifiEntry(mContext, mMainHandler,
-                    optionalPasspointConfig.get(), mWifiManager, mWifiNetworkScoreCache,
+            mChosenEntry = new PasspointWifiEntry(mInjector, mContext, mMainHandler,
+                    optionalPasspointConfig.get(), mWifiManager,
                     false /* forSavedNetworksPage */);
         } else {
             Optional<WifiConfiguration> optionalWifiConfig =
@@ -91,8 +107,8 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
                                             uniqueIdToPasspointWifiEntryKey(wifiConfig.getKey())))
                             .findAny();
             if (optionalWifiConfig.isPresent()) {
-                mChosenEntry = new PasspointWifiEntry(mContext, mMainHandler,
-                        optionalWifiConfig.get(), mWifiManager, mWifiNetworkScoreCache,
+                mChosenEntry = new PasspointWifiEntry(mInjector, mContext, mMainHandler,
+                        optionalWifiConfig.get(), mWifiManager,
                         false /* forSavedNetworksPage */);
             } else {
                 throw new IllegalArgumentException(
@@ -199,8 +215,8 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
                         osuProviderToPasspointConfig.get(provider);
                 if (provisionedConfig != null && TextUtils.equals(mChosenEntry.getKey(),
                         uniqueIdToPasspointWifiEntryKey(provisionedConfig.getUniqueId()))) {
-                    mOsuWifiEntry = new OsuWifiEntry(mContext, mMainHandler, provider, mWifiManager,
-                            mWifiNetworkScoreCache, false /* forSavedNetworksPage */);
+                    mOsuWifiEntry = new OsuWifiEntry(mInjector, mContext, mMainHandler, provider,
+                            mWifiManager, false /* forSavedNetworksPage */);
                     mOsuWifiEntry.updateScanResultInfo(osuProviderToScans.get(provider));
                     mOsuWifiEntry.setAlreadyProvisioned(true);
                     mChosenEntry.setOsuWifiEntry(mOsuWifiEntry);
