@@ -28,28 +28,31 @@ import static android.net.wifi.WifiInfo.SECURITY_TYPE_PSK;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_SAE;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_WEP;
 
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.verify;
 import static com.android.wifitrackerlib.StandardWifiEntry.ScanResultKey;
 import static com.android.wifitrackerlib.StandardWifiEntry.StandardWifiEntryKey;
 import static com.android.wifitrackerlib.StandardWifiEntry.ssidAndSecurityTypeToStandardWifiEntryKey;
 import static com.android.wifitrackerlib.TestUtils.buildScanResult;
 import static com.android.wifitrackerlib.WifiEntry.CONNECTED_STATE_CONNECTED;
 import static com.android.wifitrackerlib.WifiEntry.CONNECTED_STATE_DISCONNECTED;
-import static com.android.wifitrackerlib.WifiEntry.SPEED_FAST;
-import static com.android.wifitrackerlib.WifiEntry.SPEED_SLOW;
 import static com.android.wifitrackerlib.WifiEntry.WIFI_LEVEL_UNREACHABLE;
 
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.app.admin.DevicePolicyManager;
+import android.app.admin.WifiSsidPolicy;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.res.Resources;
 import android.net.ConnectivityManager;
@@ -57,28 +60,32 @@ import android.net.LinkProperties;
 import android.net.MacAddress;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
-import android.net.NetworkKey;
-import android.net.NetworkScoreManager;
-import android.net.ScoredNetwork;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.net.wifi.WifiNetworkScoreCache;
+import android.net.wifi.WifiSsid;
 import android.os.Handler;
+import android.os.UserHandle;
+import android.os.UserManager;
 import android.os.test.TestLooper;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.util.ArraySet;
+
+import androidx.core.os.BuildCompat;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.MockitoSession;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 
@@ -98,23 +105,20 @@ public class StandardWifiEntryTest {
     @Mock private SubscriptionManager mSubscriptionManager;
     @Mock private WifiInfo mMockWifiInfo;
     @Mock private NetworkInfo mMockNetworkInfo;
+    @Mock private WifiTrackerInjector mMockInjector;
     @Mock private Context mMockContext;
-    @Mock private NetworkScoreManager mMockNetworkScoreManager;
-    @Mock private WifiNetworkScoreCache mMockScoreCache;
-    @Mock private ScoredNetwork mMockScoredNetwork;
+    @Mock private Resources mMockResources;
+    @Mock private UserManager mUserManager;
+    @Mock private DevicePolicyManager mDevicePolicyManager;
 
     private TestLooper mTestLooper;
     private Handler mTestHandler;
 
+    private static final String TEST_PACKAGE_NAME = "com.google.somePackage";
+    private static final int MANAGED_PROFILE_UID = 1100000;
+
     @Before
     public void setUp() {
-        Utils.sFeatureFlagUtilsWrapper = new Utils.FeatureFlagUtilsWrapper() {
-            @Override
-            boolean isProviderModelEnabled(Context context) {
-                return false;
-            }
-        };
-
         MockitoAnnotations.initMocks(this);
 
         mTestLooper = new TestLooper();
@@ -133,13 +137,14 @@ public class StandardWifiEntryTest {
                 .thenReturn(OKAY_LEVEL);
         when(mMockWifiManager.calculateSignalLevel(BAD_RSSI))
                 .thenReturn(BAD_LEVEL);
-        when(mMockContext.getSystemService(Context.NETWORK_SCORE_SERVICE))
-                .thenReturn(mMockNetworkScoreManager);
-        when(mMockScoreCache.getScoredNetwork((ScanResult) any())).thenReturn(mMockScoredNetwork);
-        when(mMockScoreCache.getScoredNetwork((NetworkKey) any())).thenReturn(mMockScoredNetwork);
+        when(mMockContext.getResources()).thenReturn(mMockResources);
 
         when(mMockContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE))
                 .thenReturn(mSubscriptionManager);
+        when(mMockContext.getSystemService(DevicePolicyManager.class))
+                .thenReturn(mDevicePolicyManager);
+        when(mMockInjector.getUserManager()).thenReturn(mUserManager);
+        when(mMockInjector.getDevicePolicyManager()).thenReturn(mDevicePolicyManager);
     }
 
     /**
@@ -148,12 +153,13 @@ public class StandardWifiEntryTest {
     @Test
     public void testConstructor_mismatchedSsids_throwsException() {
         try {
-            new StandardWifiEntry(mMockContext, mTestHandler,
+            new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                     ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                     null, Arrays.asList(
                             buildScanResult("ssid0", "bssid0", 0, GOOD_RSSI),
                             buildScanResult("ssid1", "bssid1", 0, GOOD_RSSI)),
-                    mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                    mMockWifiManager, false /* forSavedNetworksPage */);
             fail("Scan list with different SSIDs should have thrown exception");
         } catch (IllegalArgumentException e) {
             // Test succeeded
@@ -165,13 +171,14 @@ public class StandardWifiEntryTest {
      */
     @Test
     public void testConstructor_scanResults_setsBestLevel() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(
                         buildScanResult("ssid", "bssid0", 0, GOOD_RSSI),
                         buildScanResult("ssid", "bssid1", 0, OKAY_RSSI),
                         buildScanResult("ssid", "bssid2", 0, BAD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getLevel()).isEqualTo(GOOD_LEVEL);
     }
@@ -186,15 +193,17 @@ public class StandardWifiEntryTest {
         final ScanResult secureScan = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
         secureScan.capabilities = "EAP/SHA1";
 
-        final StandardWifiEntry unsecureEntry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry unsecureEntry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN,
                         true /* isTargetingNewNetworks */),
-                null, Arrays.asList(unsecureScan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(unsecureScan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
-        final StandardWifiEntry secureEntry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry secureEntry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP,
                         true /* isTargetingNewNetworks */),
-                null, Arrays.asList(secureScan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(secureScan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(unsecureEntry.getSecurity()).isEqualTo(WifiEntry.SECURITY_NONE);
@@ -206,10 +215,11 @@ public class StandardWifiEntryTest {
      */
     @Test
     public void testUpdateScanResultInfo_mismatchedSsids_throwsException() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid0", SECURITY_TYPE_EAP),
                 null, Arrays.asList(buildScanResult("ssid0", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         try {
             entry.updateScanResultInfo(Arrays.asList(
@@ -225,10 +235,11 @@ public class StandardWifiEntryTest {
      */
     @Test
     public void testUpdateScanResultInfo_notifiesListener() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(buildScanResult("ssid", "bssid", 0)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         entry.setListener(mMockListener);
 
         entry.updateScanResultInfo(Arrays.asList(buildScanResult("ssid", "bssid", 1)));
@@ -242,10 +253,11 @@ public class StandardWifiEntryTest {
      */
     @Test
     public void testUpdateScanResultInfo_updatesLevel() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(buildScanResult("ssid", "bssid", 0, BAD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getLevel()).isEqualTo(BAD_LEVEL);
 
@@ -259,9 +271,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.getTitle()).isEqualTo("ssid");
@@ -272,9 +285,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurity()).isEqualTo(WifiEntry.SECURITY_EAP);
@@ -285,9 +299,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         final WifiConfiguration config2 = new WifiConfiguration(config);
@@ -305,9 +320,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         final WifiConfiguration config2 = new WifiConfiguration(config);
@@ -324,9 +340,10 @@ public class StandardWifiEntryTest {
     public void testUpdateConfig_unsavedToSaved() {
         final ScanResult scan = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
         scan.capabilities = "EAP/SHA1";
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                null, Arrays.asList(scan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(scan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.isSaved()).isFalse();
@@ -346,9 +363,10 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         config.SSID = "\"ssid\"";
         config.networkId = 1;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.isSaved()).isTrue();
@@ -364,9 +382,10 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         config.SSID = "\"ssid\"";
         config.networkId = 1;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
         when(mMockWifiInfo.getNetworkId()).thenReturn(1);
         when(mMockWifiInfo.getRssi()).thenReturn(GOOD_RSSI);
@@ -384,9 +403,10 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         config.SSID = "\"ssid\"";
         config.networkId = 1;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
         when(mMockWifiInfo.getNetworkId()).thenReturn(2);
         when(mMockWifiInfo.getRssi()).thenReturn(-50);
@@ -401,9 +421,10 @@ public class StandardWifiEntryTest {
     @Test
     public void testConnect_savedNetwork_usesSavedConfig() {
         final ScanResult scan = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                null, Arrays.asList(scan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(scan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
@@ -418,9 +439,10 @@ public class StandardWifiEntryTest {
     @Test
     public void testConnect_savedNetwork_usesSavedConfig_withOutSim() {
         final ScanResult scan = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                null, Arrays.asList(scan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(scan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
@@ -440,10 +462,11 @@ public class StandardWifiEntryTest {
 
     @Test
     public void testConnect_openNetwork_callsConnect() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         entry.connect(null /* ConnectCallback */);
 
@@ -454,9 +477,10 @@ public class StandardWifiEntryTest {
     public void testConnect_unsavedSecureNetwork_returnsNoConfigFailure() {
         final ScanResult secureScan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         secureScan.capabilities = "PSK";
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
-                null, Arrays.asList(secureScan), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(secureScan), mMockWifiManager,
                 false /* forSavedNetworksPage */);
         entry.setListener(mMockListener);
 
@@ -479,9 +503,10 @@ public class StandardWifiEntryTest {
         when(spyConfig.getRandomizedMacAddress())
                 .thenReturn(MacAddress.fromString(randomizedMac));
 
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(spyConfig), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(spyConfig), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         final String macAddress = entry.getMacAddress();
@@ -498,9 +523,10 @@ public class StandardWifiEntryTest {
         config.networkId = 1;
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         when(mMockWifiManager.getFactoryMacAddresses()).thenReturn(new String[]{factoryMac});
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         final String macAddress = entry.getMacAddress();
@@ -525,9 +551,10 @@ public class StandardWifiEntryTest {
         config.networkId = networkId;
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         when(mMockWifiManager.getFactoryMacAddresses()).thenReturn(new String[]{factoryMac});
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         entry.updateConnectionInfo(mMockWifiInfo, networkInfo);
@@ -573,9 +600,10 @@ public class StandardWifiEntryTest {
         final ScanResult pskScanResult = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
         pskScanResult.capabilities = "PSK";
 
-        final StandardWifiEntry pskWifiEntry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry pskWifiEntry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey(pskScanResult.SSID, SECURITY_TYPE_PSK),
-                null, Arrays.asList(pskScanResult), mMockWifiManager, mMockScoreCache,
+                null, Arrays.asList(pskScanResult), mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(pskWifiEntry.canEasyConnect()).isFalse();
@@ -621,9 +649,10 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         config.SSID = "\"ssid\"";
         config.networkId = 1;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
         when(mMockWifiInfo.getNetworkId()).thenReturn(1);
         when(mMockWifiInfo.getRssi()).thenReturn(GOOD_RSSI);
@@ -639,9 +668,22 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.setSecurityParams(wifiConfigurationSecureType);
-        return new StandardWifiEntry(mMockContext, mTestHandler,
+        return new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 new StandardWifiEntryKey(config), Collections.singletonList(config), null,
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
+    }
+
+    private StandardWifiEntry getSavedDOStandardWifiEntry(int wifiConfigurationSecureType) {
+        final WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(wifiConfigurationSecureType);
+        config.creatorUid = MANAGED_PROFILE_UID;
+        config.creatorName = TEST_PACKAGE_NAME;
+        return new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                new StandardWifiEntryKey(config), Collections.singletonList(config), null,
+                mMockWifiManager, false /* forSavedNetworksPage */);
     }
 
     @Test
@@ -651,16 +693,15 @@ public class StandardWifiEntryTest {
         final String[] wifiStatusArray = new String[]{"", "Scanning", "Connecting",
                 "Authenticating", "Obtaining IP address", "Connected"};
 
-        final Resources mockResources = mock(Resources.class);
-        when(mMockContext.getResources()).thenReturn(mockResources);
-        when(mockResources.getString(R.string.wifitrackerlib_summary_separator))
+        when(mMockContext.getString(R.string.wifitrackerlib_summary_separator))
                 .thenReturn(summarySeparator);
-        when(mockResources.getStringArray(R.array.wifitrackerlib_wifi_status))
+        when(mMockContext.getResources()).thenReturn(mMockResources);
+        when(mMockResources.getStringArray(R.array.wifitrackerlib_wifi_status))
                 .thenReturn(wifiStatusArray);
         final ConnectivityManager mockConnectivityManager = mock(ConnectivityManager.class);
         final NetworkCapabilities networkCapabilities = new NetworkCapabilities.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED).build();
-        when(mMockContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+        when(mMockContext.getSystemService(ConnectivityManager.class))
                 .thenReturn(mockConnectivityManager);
 
         final WifiInfo wifiInfo = new WifiInfo.Builder().setNetworkId(networkId).build();
@@ -671,9 +712,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.networkId = networkId;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         entry.updateConnectionInfo(wifiInfo, networkInfo);
@@ -684,28 +726,20 @@ public class StandardWifiEntryTest {
     }
 
     @Test
-    public void testGetSummary_providerModelConnectedButNotDefault_doesNotShowConnected() {
-        Utils.sFeatureFlagUtilsWrapper = new Utils.FeatureFlagUtilsWrapper() {
-            @Override
-            boolean isProviderModelEnabled(Context context) {
-                return true;
-            }
-        };
+    public void testGetSummary_connectedButNotDefault_doesNotShowConnected() {
         final int networkId = 1;
         final String summarySeparator = " / ";
         final String[] wifiStatusArray = new String[]{"", "Scanning", "Connecting",
                 "Authenticating", "Obtaining IP address", "Connected"};
 
-        final Resources mockResources = mock(Resources.class);
-        when(mMockContext.getResources()).thenReturn(mockResources);
-        when(mockResources.getString(R.string.wifitrackerlib_summary_separator))
+        when(mMockContext.getString(R.string.wifitrackerlib_summary_separator))
                 .thenReturn(summarySeparator);
-        when(mockResources.getStringArray(R.array.wifitrackerlib_wifi_status))
+        when(mMockResources.getStringArray(R.array.wifitrackerlib_wifi_status))
                 .thenReturn(wifiStatusArray);
         final ConnectivityManager mockConnectivityManager = mock(ConnectivityManager.class);
         final NetworkCapabilities networkCapabilities = new NetworkCapabilities.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED).build();
-        when(mMockContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+        when(mMockContext.getSystemService(ConnectivityManager.class))
                 .thenReturn(mockConnectivityManager);
 
         final WifiInfo wifiInfo = new WifiInfo.Builder().setNetworkId(networkId).build();
@@ -716,9 +750,10 @@ public class StandardWifiEntryTest {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
         config.networkId = networkId;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         entry.updateConnectionInfo(wifiInfo, networkInfo);
@@ -731,7 +766,7 @@ public class StandardWifiEntryTest {
     @Test
     public void testShouldShowXLevelIcon_unvalidatedOrNotDefault_returnsTrue() {
         final int networkId = 1;
-        when(mMockContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+        when(mMockContext.getSystemService(ConnectivityManager.class))
                 .thenReturn(mMockConnectivityManager);
         final NetworkCapabilities networkCapabilities = new NetworkCapabilities.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED).build();
@@ -743,9 +778,10 @@ public class StandardWifiEntryTest {
         config.SSID = "\"ssid\"";
         config.networkId = networkId;
 
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(config), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(config), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         // Disconnected should return false;
@@ -775,9 +811,7 @@ public class StandardWifiEntryTest {
     @Test
     public void testGetSecurityString_pskAndSae_getWpaWpa2Wpa3Personal() {
         final String wifiSecurityShortWpaWpa2Wpa3 = "WPA/WPA2/WPA3";
-        final Resources mockResources = mock(Resources.class);
-        when(mMockContext.getResources()).thenReturn(mockResources);
-        when(mockResources.getString(R.string.wifitrackerlib_wifi_security_short_wpa_wpa2_wpa3))
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_security_short_wpa_wpa2_wpa3))
                 .thenReturn(wifiSecurityShortWpaWpa2Wpa3);
 
         WifiConfiguration pskConfig = new WifiConfiguration();
@@ -792,10 +826,11 @@ public class StandardWifiEntryTest {
         ScanResult saeScan = buildScanResult("ssid", "bssid0", 0, BAD_RSSI);
         saeScan.capabilities = "SAE";
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
                 Arrays.asList(pskConfig, saeConfig), Arrays.asList(pskScan, saeScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurityString(true /* concise */))
                 .isEqualTo(wifiSecurityShortWpaWpa2Wpa3);
@@ -805,11 +840,9 @@ public class StandardWifiEntryTest {
     public void testGetSecurityString_connected_getConnectionSecurityType() {
         final String wifiSecurityShortWpaWpa2 = "WPA/WPA2";
         final String wifiSecurityShortWpa3 = "WPA3";
-        final Resources mockResources = mock(Resources.class);
-        when(mMockContext.getResources()).thenReturn(mockResources);
-        when(mockResources.getString(R.string.wifitrackerlib_wifi_security_short_wpa_wpa2))
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_security_short_wpa_wpa2))
                 .thenReturn(wifiSecurityShortWpaWpa2);
-        when(mockResources.getString(R.string.wifitrackerlib_wifi_security_short_sae))
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_security_short_sae))
                 .thenReturn(wifiSecurityShortWpa3);
 
         WifiConfiguration pskConfig = new WifiConfiguration();
@@ -830,10 +863,11 @@ public class StandardWifiEntryTest {
         when(mMockWifiInfo.getRssi()).thenReturn(GOOD_RSSI);
         when(mMockNetworkInfo.getDetailedState()).thenReturn(NetworkInfo.DetailedState.CONNECTED);
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
                 Arrays.asList(pskConfig, saeConfig), Arrays.asList(pskScan, saeScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         when(mMockWifiInfo.getCurrentSecurityType()).thenReturn(SECURITY_TYPE_PSK);
         entry.updateConnectionInfo(mMockWifiInfo, mMockNetworkInfo);
@@ -853,9 +887,7 @@ public class StandardWifiEntryTest {
     @Test
     public void testGetSecurityString_eapAndEapWpa3_getWpaWpa2Wpa3Enterprise() {
         final String wifiSecurityEapWpaWpa2Wpa3 = "WPA/WPA2/WPA3-Enterprise";
-        final Resources mockResources = mock(Resources.class);
-        when(mMockContext.getResources()).thenReturn(mockResources);
-        when(mockResources.getString(R.string.wifitrackerlib_wifi_security_short_eap_wpa_wpa2_wpa3))
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_security_short_eap_wpa_wpa2_wpa3))
                 .thenReturn(wifiSecurityEapWpaWpa2Wpa3);
 
         WifiConfiguration eapConfig = new WifiConfiguration();
@@ -870,10 +902,11 @@ public class StandardWifiEntryTest {
         final ScanResult eapWpa3Scan = buildScanResult("ssid", "bssid", 0, GOOD_RSSI);
         eapWpa3Scan.capabilities = "[RSN-EAP/SHA256][MFPR][MFPC]";
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
                 Arrays.asList(eapConfig, eapWpa3Config), Arrays.asList(eapScan, eapWpa3Scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurityString(true /* concise */))
                 .isEqualTo(wifiSecurityEapWpaWpa2Wpa3);
@@ -891,11 +924,12 @@ public class StandardWifiEntryTest {
 
     @Test
     public void testCanSignIn_captivePortalCapability_returnsTrue() {
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(
                         buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         NetworkCapabilities captivePortalCapabilities = new NetworkCapabilities.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL).build();
         entry.updateNetworkCapabilities(captivePortalCapabilities);
@@ -905,34 +939,41 @@ public class StandardWifiEntryTest {
 
     @Test
     public void testUpdateNetworkCapabilities_userConnect_autoOpenCaptivePortalOnce() {
-        when(mMockContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+        when(mMockContext.getSystemService(ConnectivityManager.class))
                 .thenReturn(mMockConnectivityManager);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(
                         buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         NetworkCapabilities captivePortalCapabilities = new NetworkCapabilities.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL).build();
 
-        // Simulate user tapping on the network and receiving captive portal capabilities.
-        // This should trigger the captive portal app.
-        entry.connect(null /* callback */);
-        entry.updateNetworkCapabilities(captivePortalCapabilities);
+        MockitoSession session = mockitoSession().spyStatic(HiddenApiWrapper.class).startMocking();
+        try {
+            // Simulate user tapping on the network and receiving captive portal capabilities.
+            // This should trigger the captive portal app.
+            entry.connect(null /* callback */);
+            entry.updateNetworkCapabilities(captivePortalCapabilities);
 
-        verify(mMockConnectivityManager, times(1)).startCaptivePortalApp(any());
+            verify(() -> HiddenApiWrapper.startCaptivePortalApp(any(), any()), times(1));
 
-        // Update network capabilities again. This should not trigger the captive portal app.
-        entry.updateNetworkCapabilities(captivePortalCapabilities);
+            // Update network capabilities again. This should not trigger the captive portal app.
+            entry.updateNetworkCapabilities(captivePortalCapabilities);
 
-        verify(mMockConnectivityManager, times(1)).startCaptivePortalApp(any());
+            verify(() -> HiddenApiWrapper.startCaptivePortalApp(any(), any()), times(1));
+        } finally {
+            session.finishMocking();
+        }
     }
 
     @Test
     public void testShouldEditBeforeConnect_nullWifiConfig_returnFalse() {
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.shouldEditBeforeConnect()).isFalse();
     }
@@ -943,18 +984,20 @@ public class StandardWifiEntryTest {
         WifiConfiguration wifiConfig = new WifiConfiguration();
         wifiConfig.SSID = "\"ssid\"";
         wifiConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OPEN);
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(wifiConfig), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(wifiConfig), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.shouldEditBeforeConnect()).isFalse();
 
         // Test enhanced open networks.
         wifiConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
-        entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OWE),
-                Collections.singletonList(wifiConfig), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(wifiConfig), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
 
         assertThat(entry.shouldEditBeforeConnect()).isFalse();
@@ -966,9 +1009,10 @@ public class StandardWifiEntryTest {
         WifiConfiguration wifiConfig = spy(new WifiConfiguration());
         wifiConfig.SSID = "\"ssid\"";
         wifiConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
-                Collections.singletonList(wifiConfig), null, mMockWifiManager, mMockScoreCache,
+                Collections.singletonList(wifiConfig), null, mMockWifiManager,
                 false /* forSavedNetworksPage */);
         NetworkSelectionStatus.Builder statusBuilder = new NetworkSelectionStatus.Builder();
         NetworkSelectionStatus networkSelectionStatus = spy(statusBuilder.setNetworkSelectionStatus(
@@ -1005,99 +1049,53 @@ public class StandardWifiEntryTest {
     }
 
     @Test
-    public void testGetSpeed_cacheUpdated_speedValueChanges() {
-        when(mMockScoredNetwork.calculateBadge(GOOD_RSSI)).thenReturn(SPEED_FAST);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
-                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                null, Collections.singletonList(buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
-
-        when(mMockScoredNetwork.calculateBadge(GOOD_RSSI)).thenReturn(SPEED_SLOW);
-        entry.onScoreCacheUpdated();
-
-        assertThat(entry.getSpeed()).isEqualTo(SPEED_SLOW);
-    }
-
-    @Test
-    public void testGetSpeed_connected_useWifiInfoRssiForSpeed() {
-        when(mMockScoredNetwork.calculateBadge(BAD_RSSI)).thenReturn(SPEED_SLOW);
-        when(mMockScoredNetwork.calculateBadge(GOOD_RSSI)).thenReturn(SPEED_FAST);
-        when(mMockWifiInfo.getNetworkId()).thenReturn(1);
-        when(mMockWifiInfo.getRssi()).thenReturn(BAD_RSSI);
-        when(mMockWifiInfo.getSSID()).thenReturn("\"ssid\"");
-        when(mMockWifiInfo.getBSSID()).thenReturn("01:23:45:67:89:ab");
-        final WifiConfiguration config = new WifiConfiguration();
-        config.SSID = "\"ssid\"";
-        config.networkId = 1;
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
-                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                Collections.singletonList(config), Collections.singletonList(
-                        buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)), mMockWifiManager,
-                mMockScoreCache, false /* forSavedNetworksPage */);
-
-        entry.updateConnectionInfo(mMockWifiInfo, mMockNetworkInfo);
-
-        assertThat(entry.getSpeed()).isEqualTo(SPEED_SLOW);
-    }
-
-    @Test
-    public void testGetSpeed_newScanResults_speedValueChanges() {
-        when(mMockScoredNetwork.calculateBadge(BAD_RSSI)).thenReturn(SPEED_SLOW);
-        when(mMockScoredNetwork.calculateBadge(GOOD_RSSI)).thenReturn(SPEED_FAST);
-        final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
-                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
-                null, Collections.singletonList(buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
-
-        entry.updateScanResultInfo(Collections.singletonList(
-                buildScanResult("ssid", "bssid0", 0, BAD_RSSI)));
-
-        assertThat(entry.getSpeed()).isEqualTo(SPEED_SLOW);
-    }
-
-    @Test
     public void testCanConnect_nonEapMethod_returnTrueIfReachable() {
         ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
-        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN),
                 null, Arrays.asList(buildScanResult("ssid", "bssid0", 0, GOOD_RSSI)),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
 
         scan.capabilities = "OWE";
-        spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OWE),
                 null, Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
 
         scan.capabilities = "WEP";
-        spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_WEP),
                 null, Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
 
         scan.capabilities = "PSK";
-        spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
                 null, Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
 
         scan.capabilities = "SAE";
-        spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_SAE),
                 null, Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
@@ -1113,10 +1111,11 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         scan.capabilities = "EAP/SHA1";
-        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
                 Collections.singletonList(config), Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
 
         assertThat(spyEntry.canConnect()).isEqualTo(true);
@@ -1133,10 +1132,11 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         scan.capabilities = "EAP/SHA1";
-        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
                 Collections.singletonList(config), Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
         when(mSubscriptionManager.getActiveSubscriptionInfoList())
                 .thenReturn(Arrays.asList(mock(SubscriptionInfo.class)));
@@ -1156,10 +1156,11 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         scan.capabilities = "EAP/SHA1";
-        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
                 Collections.singletonList(config), Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
         SubscriptionInfo mockSubscriptionInfo = mock(SubscriptionInfo.class);
         when(mockSubscriptionInfo.getCarrierId()).thenReturn(carrierId);
@@ -1182,10 +1183,11 @@ public class StandardWifiEntryTest {
         config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
         ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         scan.capabilities = "EAP/SHA1";
-        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
                 Collections.singletonList(config), Collections.singletonList(scan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */));
+                mMockWifiManager, false /* forSavedNetworksPage */));
         when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
         SubscriptionInfo mockSubscriptionInfo = mock(SubscriptionInfo.class);
         when(mockSubscriptionInfo.getCarrierId()).thenReturn(simCarrierId);
@@ -1195,6 +1197,201 @@ public class StandardWifiEntryTest {
         assertThat(spyEntry.canConnect()).isEqualTo(false);
     }
 
+    @Test
+    public void testCanConnect_allowlistRestriction_returnTrue() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        WifiSsidPolicy policy = new WifiSsidPolicy(
+                WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_ALLOWLIST,
+                new ArraySet<>(Arrays.asList(
+                        WifiSsid.fromBytes("ssid".getBytes(StandardCharsets.UTF_8)))));
+        when(mDevicePolicyManager.getWifiSsidPolicy()).thenReturn(policy);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(true);
+    }
+
+    @Test
+    public void testCanConnect_allowlistRestriction_returnFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        WifiSsidPolicy policy = new WifiSsidPolicy(
+                WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_ALLOWLIST,
+                new ArraySet<>(Arrays.asList(
+                        WifiSsid.fromBytes("ssid2".getBytes(StandardCharsets.UTF_8)))));
+        when(mDevicePolicyManager.getWifiSsidPolicy()).thenReturn(policy);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(false);
+    }
+
+    @Test
+    public void testCanConnect_denylistRestriction_returnTrue() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        WifiSsidPolicy policy = new WifiSsidPolicy(
+                WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_DENYLIST,
+                new ArraySet<>(Arrays.asList(
+                        WifiSsid.fromBytes("ssid2".getBytes(StandardCharsets.UTF_8)))));
+        when(mDevicePolicyManager.getWifiSsidPolicy()).thenReturn(policy);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(true);
+    }
+
+    @Test
+    public void testCanConnect_denylistRestriction_returnFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        WifiSsidPolicy policy = new WifiSsidPolicy(
+                WifiSsidPolicy.WIFI_SSID_POLICY_TYPE_DENYLIST,
+                new ArraySet<>(Arrays.asList(
+                        WifiSsid.fromBytes("ssid".getBytes(StandardCharsets.UTF_8)))));
+        when(mDevicePolicyManager.getWifiSsidPolicy()).thenReturn(policy);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(false);
+    }
+
+    @Test
+    public void testCanConnect_userRestrictionSet_savedNetwork_returnTrue() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        when(mUserManager.hasUserRestriction(
+                UserManager.DISALLOW_ADD_WIFI_CONFIG)).thenReturn(true);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+        when(spyEntry.isSaved()).thenReturn(true);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(true);
+    }
+
+    @Test
+    public void testCanConnect_userRestrictionSet_suggestionNetwork_returnTrue() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        when(mUserManager.hasUserRestriction(
+                UserManager.DISALLOW_ADD_WIFI_CONFIG)).thenReturn(true);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+        when(spyEntry.isSuggestion()).thenReturn(true);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(true);
+    }
+
+    @Test
+    public void testCanConnect_UserRestrictionSet_returnFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        when(mUserManager.hasUserRestriction(
+                UserManager.DISALLOW_ADD_WIFI_CONFIG)).thenReturn(true);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+        when(spyEntry.isSaved()).thenReturn(false);
+        when(spyEntry.isSuggestion()).thenReturn(false);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(false);
+    }
+
+    @Test
+    public void testCanConnect_SecurityTypeRestriction_returnTrue() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        when(mDevicePolicyManager.getMinimumRequiredWifiSecurityLevel()).thenReturn(
+                DevicePolicyManager.WIFI_SECURITY_PERSONAL);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(true);
+    }
+
+    @Test
+    public void testCanConnect_SecurityTypeRestriction_returnFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+        ScanResult scan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
+        scan.capabilities = "PSK";
+        when(mDevicePolicyManager.getMinimumRequiredWifiSecurityLevel()).thenReturn(
+                DevicePolicyManager.WIFI_SECURITY_ENTERPRISE_EAP);
+        StandardWifiEntry spyEntry = spy(new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK),
+                Collections.singletonList(config), Collections.singletonList(scan),
+                mMockWifiManager, false /* forSavedNetworksPage */));
+        when(spyEntry.getConnectedState()).thenReturn(CONNECTED_STATE_DISCONNECTED);
+
+        assertThat(spyEntry.canConnect()).isEqualTo(false);
+    }
 
     @Test
     public void testStandardWifiEntryKeyConstructor_fromConfig_matchesFromScanResultKey() {
@@ -1231,11 +1428,12 @@ public class StandardWifiEntryTest {
         pskScan.capabilities = "PSK";
         ScanResult saeScan = buildScanResult("ssid", "bssid0", 0, BAD_RSSI);
         saeScan.capabilities = "SAE";
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK,
                         true /* isTargetingNewNetwork */),
                 Collections.singletonList(pskConfig), Arrays.asList(pskScan, saeScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         // Only PSK config, so use PSK scan level
         assertThat(entry.getLevel()).isEqualTo(GOOD_LEVEL);
@@ -1258,11 +1456,12 @@ public class StandardWifiEntryTest {
     public void testConnect_unsavedOpen_configuresOpenNetwork() {
         ScanResult openScan = buildScanResult("ssid", "bssid0", 0, GOOD_RSSI);
         openScan.capabilities = "";
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN,
                         true /* isTargetingNewNetworks */),
                 null, Collections.singletonList(openScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         ArgumentCaptor<WifiConfiguration> connectConfigCaptor =
                 ArgumentCaptor.forClass(WifiConfiguration.class);
 
@@ -1277,11 +1476,12 @@ public class StandardWifiEntryTest {
     public void testConnect_unsavedOwe_configuresOweNetwork() {
         ScanResult oweScan = buildScanResult("ssid", "bssid0", 0, BAD_RSSI);
         oweScan.capabilities = "OWE";
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OWE,
                         true /* isTargetingNewNetworks */),
                 null, Collections.singletonList(oweScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         ArgumentCaptor<WifiConfiguration> connectConfigCaptor =
                 ArgumentCaptor.forClass(WifiConfiguration.class);
 
@@ -1296,11 +1496,12 @@ public class StandardWifiEntryTest {
     public void testConnect_unsavedOpenOwe_configuresOweAndOpenNetwork() {
         ScanResult oweTransitionScan = buildScanResult("ssid", "bssid0", 0, BAD_RSSI);
         oweTransitionScan.capabilities = "OWE_TRANSITION";
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN,
                         true /* isTargetingNewNetworks */),
                 null, Collections.singletonList(oweTransitionScan),
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
         ArgumentCaptor<WifiConfiguration> connectConfigCaptor =
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         ArgumentCaptor<WifiConfiguration> savedConfigCaptor =
@@ -1325,11 +1526,12 @@ public class StandardWifiEntryTest {
         oweConfig.SSID = "\"ssid\"";
         oweConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_OPEN,
                         true /* isTargetingNewNetwork */),
                 Arrays.asList(openConfig, oweConfig), null,
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurity()).isEqualTo(WifiEntry.SECURITY_NONE);
         assertThat(entry.getWifiConfiguration()).isEqualTo(openConfig);
@@ -1344,11 +1546,12 @@ public class StandardWifiEntryTest {
         saeConfig.SSID = "\"ssid\"";
         saeConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_PSK,
                         true /* isTargetingNewNetwork */),
                 Arrays.asList(pskConfig, saeConfig), null,
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurity()).isEqualTo(WifiEntry.SECURITY_PSK);
         assertThat(entry.getWifiConfiguration()).isEqualTo(pskConfig);
@@ -1363,13 +1566,68 @@ public class StandardWifiEntryTest {
         eapWpa3Config.SSID = "\"ssid\"";
         eapWpa3Config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP_WPA3_ENTERPRISE);
 
-        StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
+        StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mMockContext, mTestHandler,
                 ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP,
                         true /* isTargetingNewNetwork */),
                 Arrays.asList(eapConfig, eapWpa3Config), null,
-                mMockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
+                mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(entry.getSecurity()).isEqualTo(WifiEntry.SECURITY_EAP);
         assertThat(entry.getWifiConfiguration()).isEqualTo(eapConfig);
+    }
+
+    @Test
+    public void testCanShare_isDemoMode_returnsFalse() {
+        when(mMockInjector.isDemoMode()).thenReturn(true);
+
+        final StandardWifiEntry pskWifiEntry =
+                getSavedStandardWifiEntry(WifiConfiguration.SECURITY_TYPE_PSK);
+
+        assertThat(pskWifiEntry.canShare()).isFalse();
+    }
+
+    @Test
+    public void testCanEasyConnect_isDemoMode_returnsFalse() {
+        when(mMockInjector.isDemoMode()).thenReturn(true);
+
+        final StandardWifiEntry pskWifiEntry =
+                getSavedStandardWifiEntry(WifiConfiguration.SECURITY_TYPE_PSK);
+
+        assertThat(pskWifiEntry.canEasyConnect()).isFalse();
+    }
+
+    @Test
+    public void testCanShare_UserRestrictionSet_returnsFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        when(mMockInjector.isDemoMode()).thenReturn(false);
+        when(mUserManager.hasUserRestrictionForUser(
+                eq(UserManager.DISALLOW_SHARING_ADMIN_CONFIGURED_WIFI), any())).thenReturn(true);
+        when(mDevicePolicyManager.getDeviceOwnerComponentOnAnyUser())
+                .thenReturn(new ComponentName(TEST_PACKAGE_NAME, new String()));
+        when(mDevicePolicyManager.getDeviceOwnerUser())
+                .thenReturn(UserHandle.getUserHandleForUid(MANAGED_PROFILE_UID));
+
+        final StandardWifiEntry pskWifiEntry =
+                getSavedDOStandardWifiEntry(WifiConfiguration.SECURITY_TYPE_PSK);
+
+        assertThat(pskWifiEntry.canShare()).isFalse();
+    }
+
+    @Test
+    public void testCanEasyConnect_UserRestrictionSet_returnsFalse() {
+        assumeTrue(BuildCompat.isAtLeastT());
+        when(mMockInjector.isDemoMode()).thenReturn(false);
+        when(mUserManager.hasUserRestrictionForUser(
+                eq(UserManager.DISALLOW_SHARING_ADMIN_CONFIGURED_WIFI), any())).thenReturn(true);
+        when(mDevicePolicyManager.getDeviceOwnerComponentOnAnyUser())
+                .thenReturn(new ComponentName(TEST_PACKAGE_NAME, new String()));
+        when(mDevicePolicyManager.getDeviceOwnerUser())
+                .thenReturn(UserHandle.getUserHandleForUid(MANAGED_PROFILE_UID));
+
+        final StandardWifiEntry pskWifiEntry =
+                getSavedDOStandardWifiEntry(WifiConfiguration.SECURITY_TYPE_PSK);
+
+        assertThat(pskWifiEntry.canEasyConnect()).isFalse();
     }
 }
