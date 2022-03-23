@@ -20,8 +20,8 @@ import static android.net.wifi.WifiInfo.INVALID_RSSI;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
-import static com.android.wifitrackerlib.Utils.getNetworkPart;
 import static com.android.wifitrackerlib.Utils.getSingleSecurityTypeFromMultipleSecurityTypes;
+import static com.android.wifitrackerlib.Utils.getSpeedFromWifiInfo;
 
 import android.net.LinkAddress;
 import android.net.LinkProperties;
@@ -32,6 +32,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 
 import androidx.annotation.AnyThread;
@@ -42,6 +43,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
+import com.android.net.module.util.NetUtils;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.net.Inet4Address;
@@ -50,7 +53,6 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.StringJoiner;
@@ -64,7 +66,7 @@ import java.util.stream.Collectors;
  * implementing BaseWifiTracker, and rely on the given API for all user-displayable information and
  * actions on the represented network.
  */
-public class WifiEntry {
+public class WifiEntry implements Comparable<WifiEntry> {
     /**
      * Security type based on WifiConfiguration.KeyMgmt
      */
@@ -110,6 +112,23 @@ public class WifiEntry {
     public static final int WIFI_LEVEL_MIN = 0;
     public static final int WIFI_LEVEL_MAX = 4;
     public static final int WIFI_LEVEL_UNREACHABLE = -1;
+
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(value = {
+            SPEED_NONE,
+            SPEED_SLOW,
+            SPEED_MODERATE,
+            SPEED_FAST,
+            SPEED_VERY_FAST
+    })
+
+    public @interface Speed {}
+
+    public static final int SPEED_NONE = 0;
+    public static final int SPEED_SLOW = 5;
+    public static final int SPEED_MODERATE = 10;
+    public static final int SPEED_FAST = 20;
+    public static final int SPEED_VERY_FAST = 30;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
@@ -200,25 +219,6 @@ public class WifiEntry {
      */
     protected static final int MAX_VERBOSE_LOG_DISPLAY_SCANRESULT_COUNT = 4;
 
-    /**
-     * Default comparator for sorting WifiEntries on a Wi-Fi picker list.
-     */
-    public static Comparator<WifiEntry> WIFI_PICKER_COMPARATOR =
-            Comparator.comparing((WifiEntry entry) -> entry.getConnectedState()
-                            != CONNECTED_STATE_CONNECTED)
-                    .thenComparing((WifiEntry entry) -> !entry.canConnect())
-                    .thenComparing((WifiEntry entry) -> !entry.isSubscription())
-                    .thenComparing((WifiEntry entry) -> !entry.isSaved())
-                    .thenComparing((WifiEntry entry) -> !entry.isSuggestion())
-                    .thenComparing((WifiEntry entry) -> -entry.getLevel())
-                    .thenComparing((WifiEntry entry) -> entry.getTitle());
-
-    /**
-     * Default comparator for sorting WifiEntries by title.
-     */
-    public static Comparator<WifiEntry> TITLE_COMPARATOR =
-            Comparator.comparing((WifiEntry entry) -> entry.getTitle());
-
     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
     final boolean mForSavedNetworksPage;
 
@@ -229,10 +229,12 @@ public class WifiEntry {
     protected final Handler mCallbackHandler;
 
     protected int mLevel = WIFI_LEVEL_UNREACHABLE;
+    protected int mSpeed = SPEED_NONE;
     protected WifiInfo mWifiInfo;
     protected NetworkInfo mNetworkInfo;
     protected NetworkCapabilities mNetworkCapabilities;
     protected ConnectedInfo mConnectedInfo;
+    protected WifiNetworkScoreCache mScoreCache;
 
     protected ConnectCallback mConnectCallback;
     protected DisconnectCallback mDisconnectCallback;
@@ -248,12 +250,14 @@ public class WifiEntry {
     private Optional<ManageSubscriptionAction> mManageSubscriptionAction = Optional.empty();
 
     public WifiEntry(@NonNull Handler callbackHandler, @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
         checkNotNull(callbackHandler, "Cannot construct with null handler!");
         checkNotNull(wifiManager, "Cannot construct with null WifiManager!");
         mCallbackHandler = callbackHandler;
         mForSavedNetworksPage = forSavedNetworksPage;
         mWifiManager = wifiManager;
+        mScoreCache = scoreCache;
     }
 
     // Info available for all WifiEntries //
@@ -345,6 +349,12 @@ public class WifiEntry {
     public boolean isDefaultNetwork() {
         return mIsDefaultNetwork;
     }
+
+    /** Returns the speed value of the network defined by the SPEED constants */
+    @Speed
+    public int getSpeed() {
+        return mSpeed;
+    };
 
     /**
      * Returns the SSID of the entry, if applicable. Null otherwise.
@@ -466,7 +476,6 @@ public class WifiEntry {
         public String gateway;
         public String subnetMask;
         public int wifiStandard = ScanResult.WIFI_STANDARD_UNKNOWN;
-        public NetworkCapabilities networkCapabilities;
 
         /**
          * Creates an empty ConnectedInfo
@@ -486,7 +495,6 @@ public class WifiEntry {
             gateway = other.gateway;
             subnetMask = other.subnetMask;
             wifiStandard = other.wifiStandard;
-            networkCapabilities = other.networkCapabilities;
         }
     }
 
@@ -829,6 +837,7 @@ public class WifiEntry {
             final int wifiInfoRssi = wifiInfo.getRssi();
             if (wifiInfoRssi != INVALID_RSSI) {
                 mLevel = mWifiManager.calculateSignalLevel(wifiInfoRssi);
+                mSpeed = getSpeedFromWifiInfo(mScoreCache, wifiInfo);
             }
             if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
                 if (mCalledConnect) {
@@ -898,7 +907,7 @@ public class WifiEntry {
                 try {
                     InetAddress all = InetAddress.getByAddress(
                             new byte[]{(byte) 255, (byte) 255, (byte) 255, (byte) 255});
-                    mConnectedInfo.subnetMask = getNetworkPart(
+                    mConnectedInfo.subnetMask = NetUtils.getNetworkPart(
                             all, addr.getPrefixLength()).getHostAddress();
                 } catch (UnknownHostException e) {
                     // Leave subnet null;
@@ -943,7 +952,6 @@ public class WifiEntry {
         if (mConnectedInfo == null) {
             return;
         }
-        mConnectedInfo.networkCapabilities = mNetworkCapabilities;
         mIsValidated = mNetworkCapabilities != null
                 && mNetworkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
         notifyOnUpdated();
@@ -1021,14 +1029,33 @@ public class WifiEntry {
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (!(other instanceof WifiEntry)) return false;
-        return getKey().equals(((WifiEntry) other).getKey());
+    public int compareTo(@NonNull WifiEntry other) {
+        if (getLevel() != WIFI_LEVEL_UNREACHABLE && other.getLevel() == WIFI_LEVEL_UNREACHABLE) {
+            return -1;
+        }
+        if (getLevel() == WIFI_LEVEL_UNREACHABLE && other.getLevel() != WIFI_LEVEL_UNREACHABLE) {
+            return 1;
+        }
+
+        if (isSubscription() && !other.isSubscription()) return -1;
+        if (!isSubscription() && other.isSubscription()) return 1;
+
+        if (isSaved() && !other.isSaved()) return -1;
+        if (!isSaved() && other.isSaved()) return 1;
+
+        if (isSuggestion() && !other.isSuggestion()) return -1;
+        if (!isSuggestion() && other.isSuggestion()) return 1;
+
+        if (getLevel() > other.getLevel()) return -1;
+        if (getLevel() < other.getLevel()) return 1;
+
+        return getTitle().compareTo(other.getTitle());
     }
 
     @Override
-    public int hashCode() {
-        return getKey().hashCode();
+    public boolean equals(Object other) {
+        if (!(other instanceof WifiEntry)) return false;
+        return getKey().equals(((WifiEntry) other).getKey());
     }
 
     @Override
