@@ -41,6 +41,7 @@
     <string name="wifitrackerlib_private_dns_broken" msgid="6049401148262718707">"निजी डीएनएस सर्वर को ऐक्सेस नहीं किया जा सकता"</string>
     <string name="wifitrackerlib_wifi_connected_cannot_provide_internet" msgid="3803471522215612745">"डिवाइस से कनेक्ट है. इंटरनेट सेवा उपलब्ध नहीं है."</string>
     <string name="wifi_connected_low_quality" msgid="4478331645458058445">"खराब कनेक्शन"</string>
+    <string name="wifitrackerlib_admin_restricted_network" msgid="5439914801076897515">"आपके संगठन ने इसकी अनुमति नहीं दी है"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa_wpa2" msgid="4815223667006927841">"WPA/WPA2-EAP"</string>
     <string name="wifitrackerlib_wifi_security_eap_wpa_wpa2" msgid="6425661975745405271">"WPA/WPA2-एंटरप्राइज़"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa3" msgid="6210273302049534874">"WPA3-EAP"</string>
@@ -70,4 +71,11 @@
     <string name="wifitrackerlib_osu_sign_up_complete" msgid="3279606633343124580">"साइन अप की प्रक्रिया पूरी हो गई. कनेक्ट हो रहा है…"</string>
     <string name="wifitrackerlib_imsi_protection_warning" msgid="7202210931586169466">"इस नेटवर्क को एक सिम आईडी दिया जाता है जिसका इस्तेमाल डिवाइस की जगह की जानकारी का पता लगाने के लिए किया जा सकता है. "<annotation id="url">"ज़्यादा जानें"</annotation></string>
     <string name="wifitrackerlib_wifi_wont_autoconnect_for_now" msgid="4923161724964349851">"फ़िलहाल, वाई-फ़ाई अपने-आप कनेक्ट नहीं होगा"</string>
+    <string name="wifitrackerlib_wifi_standard_unknown" msgid="8339211498889012019">"कोई जानकारी नहीं"</string>
+    <string name="wifitrackerlib_wifi_standard_legacy" msgid="7760511318791054384">"लेगसी"</string>
+    <string name="wifitrackerlib_wifi_standard_11n" msgid="2642177213395884818">"वाई-फ़ाई 4"</string>
+    <string name="wifitrackerlib_wifi_standard_11ac" msgid="4347870672254411383">"वाई-फ़ाई 5"</string>
+    <string name="wifitrackerlib_wifi_standard_11ax" msgid="4071875115186480116">"वाई-फ़ाई 6"</string>
+    <string name="wifitrackerlib_wifi_standard_11ad" msgid="4955749187120493383">"WiGig"</string>
+    <string name="wifitrackerlib_wifi_standard_11be" msgid="1886834788680487835">"वाई-फ़ाई 7"</string>
 </resources>

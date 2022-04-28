@@ -26,6 +26,8 @@ import static android.net.wifi.WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_OPEN;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_OWE;
+import static android.net.wifi.WifiInfo.SECURITY_TYPE_PASSPOINT_R1_R2;
+import static android.net.wifi.WifiInfo.SECURITY_TYPE_PASSPOINT_R3;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_PSK;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_SAE;
 import static android.net.wifi.WifiInfo.SECURITY_TYPE_UNKNOWN;
@@ -149,9 +151,7 @@ public class StandardWifiEntry extends WifiEntry {
         mUserManager = injector.getUserManager();
         mDevicePolicyManager = injector.getDevicePolicyManager();
         updateSecurityTypes();
-        if (BuildCompat.isAtLeastT()) {
-            updateAdminRestrictions();
-        }
+        updateAdminRestrictions();
     }
 
     StandardWifiEntry(
@@ -318,9 +318,8 @@ public class StandardWifiEntry extends WifiEntry {
             if (!mTargetWifiConfig.enterpriseConfig.isAuthenticationSimBased()) {
                 return true;
             }
-            List<SubscriptionInfo> activeSubscriptionInfos = ((SubscriptionManager) mContext
-                    .getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE))
-                    .getActiveSubscriptionInfoList();
+            List<SubscriptionInfo> activeSubscriptionInfos = mContext
+                    .getSystemService(SubscriptionManager.class).getActiveSubscriptionInfoList();
             if (activeSubscriptionInfos == null || activeSubscriptionInfos.size() == 0) {
                 return false;
             }
@@ -667,6 +666,17 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
+    public synchronized String getStandardString() {
+        if (mWifiInfo != null) {
+            return Utils.getStandardString(mContext, mWifiInfo.getWifiStandard());
+        }
+        if (!mTargetScanResults.isEmpty()) {
+            return Utils.getStandardString(mContext, mTargetScanResults.get(0).getWifiStandard());
+        }
+        return "";
+    }
+
+    @Override
     public synchronized boolean shouldEditBeforeConnect() {
         WifiConfiguration wifiConfig = getWifiConfiguration();
         if (wifiConfig == null) {
@@ -935,6 +945,8 @@ public class StandardWifiEntry extends WifiEntry {
         return description.toString();
     }
 
+    // TODO(b/227622961): Remove the suppression once the linter recognizes BuildCompat.isAtLeastT()
+    @SuppressLint("NewApi")
     private synchronized String getScanResultDescription(ScanResult scanResult, long nowMs) {
         final StringBuilder description = new StringBuilder();
         description.append(" \n{");
@@ -944,6 +956,13 @@ public class StandardWifiEntry extends WifiEntry {
         }
         description.append("=").append(scanResult.frequency);
         description.append(",").append(scanResult.level);
+        int wifiStandard = scanResult.getWifiStandard();
+        description.append(",").append(Utils.getStandardString(mContext, wifiStandard));
+        if (BuildCompat.isAtLeastT() && wifiStandard == ScanResult.WIFI_STANDARD_11BE) {
+            description.append(",mldMac=").append(scanResult.getApMldMacAddress());
+            description.append(",linkId=").append(scanResult.getApMloLinkId());
+            description.append(",affLinks=").append(scanResult.getAffiliatedMloLinks());
+        }
         final int ageSeconds = (int) (nowMs - scanResult.timestamp / 1000) / 1000;
         description.append(",").append(ageSeconds).append("s");
         description.append("}");
@@ -955,8 +974,12 @@ public class StandardWifiEntry extends WifiEntry {
         return Utils.getNetworkSelectionDescription(getWifiConfiguration());
     }
 
+    // TODO(b/227622961): Remove the suppression once the linter recognizes BuildCompat.isAtLeastT()
     @SuppressLint("NewApi")
-    private void updateAdminRestrictions() {
+    void updateAdminRestrictions() {
+        if (!BuildCompat.isAtLeastT()) {
+            return;
+        }
         if (mUserManager != null) {
             mHasAddConfigUserRestriction = mUserManager.hasUserRestriction(
                     UserManager.DISALLOW_ADD_WIFI_CONFIG);
@@ -1005,6 +1028,7 @@ public class StandardWifiEntry extends WifiEntry {
                 }
             }
         }
+        mIsAdminRestricted = false;
     }
 
     private boolean hasAdminRestrictions() {
@@ -1180,9 +1204,12 @@ public class StandardWifiEntry extends WifiEntry {
         ScanResultKey(@Nullable String ssid, List<Integer> securityTypes) {
             mSsid = ssid;
             for (int security : securityTypes) {
-                mSecurityTypes.add(security);
                 // Add any security types that merge to the same WifiEntry
                 switch (security) {
+                    case SECURITY_TYPE_PASSPOINT_R1_R2:
+                    case SECURITY_TYPE_PASSPOINT_R3:
+                        // Filter out Passpoint security type from key.
+                        continue;
                     // Group OPEN and OWE networks together
                     case SECURITY_TYPE_OPEN:
                         mSecurityTypes.add(SECURITY_TYPE_OWE);
@@ -1205,6 +1232,7 @@ public class StandardWifiEntry extends WifiEntry {
                         mSecurityTypes.add(SECURITY_TYPE_EAP);
                         break;
                 }
+                mSecurityTypes.add(security);
             }
         }
 
