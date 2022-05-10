@@ -25,7 +25,6 @@ import android.content.Context;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 import android.text.TextUtils;
 import android.widget.Toast;
@@ -49,11 +48,10 @@ public class MergedCarrierEntry extends WifiEntry {
 
     MergedCarrierEntry(@NonNull Handler callbackHandler,
             @NonNull WifiManager wifiManager,
-            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage,
             @NonNull Context context,
             int subscriptionId) throws IllegalArgumentException {
-        super(callbackHandler, wifiManager, scoreCache, forSavedNetworksPage);
+        super(callbackHandler, wifiManager, forSavedNetworksPage);
         mContext = context;
         mSubscriptionId = subscriptionId;
         mKey = KEY_PREFIX + subscriptionId;
@@ -102,12 +100,27 @@ public class MergedCarrierEntry extends WifiEntry {
         return getConnectedState() == CONNECTED_STATE_DISCONNECTED && !mIsCellDefaultRoute;
     }
 
+    /**
+     * Connect to this merged carrier network and show the "Wi-Fi won't autoconnect for now" toast.
+     * @param callback callback for the connect result
+     */
     @Override
     public synchronized void connect(@Nullable ConnectCallback callback) {
+        connect(callback, true);
+    }
+
+    /**
+     * Connect to this merged carrier network.
+     * @param callback callback for the connect result
+     * @param showToast show the "Wi-Fi won't autoconnect for now" toast if {@code true}
+     */
+    public synchronized void connect(@Nullable ConnectCallback callback, boolean showToast) {
         mConnectCallback = callback;
         mWifiManager.startRestrictingAutoJoinToSubscriptionId(mSubscriptionId);
-        Toast.makeText(mContext,
-                R.string.wifitrackerlib_wifi_wont_autoconnect_for_now, Toast.LENGTH_SHORT).show();
+        if (showToast) {
+            Toast.makeText(mContext, R.string.wifitrackerlib_wifi_wont_autoconnect_for_now,
+                    Toast.LENGTH_SHORT).show();
+        }
         if (mConnectCallback != null) {
             mCallbackHandler.post(() -> {
                 final ConnectCallback connectCallback = mConnectCallback;
