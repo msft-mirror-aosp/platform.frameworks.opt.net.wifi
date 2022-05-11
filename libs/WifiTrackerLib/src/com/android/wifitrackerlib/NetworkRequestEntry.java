@@ -19,13 +19,12 @@ package com.android.wifitrackerlib;
 import android.content.Context;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
-import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
-import com.android.internal.annotations.VisibleForTesting;
 
 /**
  * WifiEntry representation of network requested through the NetworkRequest API,
@@ -37,11 +36,12 @@ public class NetworkRequestEntry extends StandardWifiEntry {
     //                    Remove once String keys are removed entirely.
     public static final String KEY_PREFIX = "NetworkRequestEntry:";
 
-    NetworkRequestEntry(@NonNull Context context, @NonNull Handler callbackHandler,
+    NetworkRequestEntry(
+            @NonNull WifiTrackerInjector injector,
+            @NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull StandardWifiEntryKey key, @NonNull WifiManager wifiManager,
-            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        super(context, callbackHandler, key, wifiManager, scoreCache, forSavedNetworksPage);
+        super(injector, context, callbackHandler, key, wifiManager, forSavedNetworksPage);
     }
 
     @Override
