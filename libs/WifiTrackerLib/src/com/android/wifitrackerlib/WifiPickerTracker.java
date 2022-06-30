@@ -196,6 +196,16 @@ public class WifiPickerTracker extends BaseWifiTracker {
      */
     @AnyThread
     public @Nullable MergedCarrierEntry getMergedCarrierEntry() {
+        if (!isInitialized() && mMergedCarrierEntry == null) {
+            // Settings currently relies on the MergedCarrierEntry being available before
+            // handleOnStart() is called in order to display the W+ toggle. Populate it here if
+            // we aren't initialized yet.
+            int subId = SubscriptionManager.getDefaultDataSubscriptionId();
+            if (subId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                mMergedCarrierEntry = new MergedCarrierEntry(mWorkerHandler, mWifiManager,
+                        /* forSavedNetworksPage */ false, mContext, subId);
+            }
+        }
         return mMergedCarrierEntry;
     }
 
@@ -241,10 +251,10 @@ public class WifiPickerTracker extends BaseWifiTracker {
     @WorkerThread
     @Override
     protected void handleWifiStateChangedAction() {
-        conditionallyUpdateScanResults(true /* lastScanSucceeded */);
-        if (mWifiManager.getWifiState() != WifiManager.WIFI_STATE_ENABLED) {
+        if (mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLED) {
             updateConnectionInfo(null, null);
         }
+        conditionallyUpdateScanResults(true /* lastScanSucceeded */);
         updateWifiEntries();
     }
 
@@ -386,13 +396,24 @@ public class WifiPickerTracker extends BaseWifiTracker {
                                     || entry == mConnectedWifiEntry)
                             .map(entry -> entry.getStandardWifiEntryKey().getScanResultKey())
                             .collect(Collectors.toSet());
+            Set<String> passpointUtf8Ssids = new ArraySet<>();
+            for (PasspointWifiEntry passpointWifiEntry : mPasspointWifiEntryCache.values()) {
+                passpointUtf8Ssids.addAll(passpointWifiEntry.getAllUtf8Ssids());
+            }
             for (StandardWifiEntry entry : mStandardWifiEntryCache) {
+                entry.updateAdminRestrictions();
                 if (entry == mConnectedWifiEntry) {
                     continue;
                 }
-                if (!entry.isSaved() && scanResultKeysWithVisibleSuggestions
-                        .contains(entry.getStandardWifiEntryKey().getScanResultKey())) {
-                    continue;
+                if (!entry.isSaved()) {
+                    if (scanResultKeysWithVisibleSuggestions
+                            .contains(entry.getStandardWifiEntryKey().getScanResultKey())) {
+                        continue;
+                    }
+                    // Filter out any unsaved entries that are already provisioned with Passpoint
+                    if (passpointUtf8Ssids.contains(entry.getSsid())) {
+                        continue;
+                    }
                 }
                 mWifiEntries.add(entry);
             }
@@ -406,7 +427,7 @@ public class WifiPickerTracker extends BaseWifiTracker {
                             && !entry.isAlreadyProvisioned()).collect(toList()));
             mWifiEntries.addAll(getContextualWifiEntries().stream().filter(entry ->
                     entry.getConnectedState() == CONNECTED_STATE_DISCONNECTED).collect(toList()));
-            Collections.sort(mWifiEntries);
+            Collections.sort(mWifiEntries, WifiEntry.WIFI_PICKER_COMPARATOR);
             if (isVerboseLoggingEnabled()) {
                 Log.v(TAG, "Connected WifiEntry: " + mConnectedWifiEntry);
                 Log.v(TAG, "Updated WifiEntries: " + Arrays.toString(mWifiEntries.toArray()));

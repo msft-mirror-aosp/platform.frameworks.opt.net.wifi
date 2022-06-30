@@ -41,7 +41,7 @@
     <string name="wifitrackerlib_private_dns_broken" msgid="6049401148262718707">"无法访问专用 DNS 服务器"</string>
     <string name="wifitrackerlib_wifi_connected_cannot_provide_internet" msgid="3803471522215612745">"已连接到设备，但无法提供互联网连接。"</string>
     <string name="wifi_connected_low_quality" msgid="4478331645458058445">"质量不佳"</string>
-    <string name="wifitrackerlib_admin_restricted_network" msgid="5439914801076897515">"贵单位不允许使用"</string>
+    <string name="wifitrackerlib_admin_restricted_network" msgid="5439914801076897515">"您的组织不允许使用"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa_wpa2" msgid="4815223667006927841">"WPA/WPA2-EAP"</string>
     <string name="wifitrackerlib_wifi_security_eap_wpa_wpa2" msgid="6425661975745405271">"WPA/WPA2-Enterprise"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa3" msgid="6210273302049534874">"WPA3-EAP"</string>
@@ -71,4 +71,11 @@
     <string name="wifitrackerlib_osu_sign_up_complete" msgid="3279606633343124580">"注册完毕。正在连接…"</string>
     <string name="wifitrackerlib_imsi_protection_warning" msgid="7202210931586169466">"此网络会收到可用于跟踪设备位置的 SIM 卡 ID。"<annotation id="url">"了解详情"</annotation></string>
     <string name="wifitrackerlib_wifi_wont_autoconnect_for_now" msgid="4923161724964349851">"WLAN 暂时无法自动连接"</string>
+    <string name="wifitrackerlib_wifi_standard_unknown" msgid="8339211498889012019">"未知"</string>
+    <string name="wifitrackerlib_wifi_standard_legacy" msgid="7760511318791054384">"旧版"</string>
+    <string name="wifitrackerlib_wifi_standard_11n" msgid="2642177213395884818">"Wi‑Fi 4"</string>
+    <string name="wifitrackerlib_wifi_standard_11ac" msgid="4347870672254411383">"Wi‑Fi 5"</string>
+    <string name="wifitrackerlib_wifi_standard_11ax" msgid="4071875115186480116">"Wi‑Fi 6"</string>
+    <string name="wifitrackerlib_wifi_standard_11ad" msgid="4955749187120493383">"WiGig"</string>
+    <string name="wifitrackerlib_wifi_standard_11be" msgid="1886834788680487835">"Wi‑Fi 7"</string>
 </resources>

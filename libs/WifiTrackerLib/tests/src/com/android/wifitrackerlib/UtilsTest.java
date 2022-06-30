@@ -87,9 +87,6 @@ public class UtilsTest {
     private static final String LABEL_METERED = "Metered";
     private static final String LABEL_UNMETERED = "Unmetered";
 
-    private static final String SYSTEM_UID_APP_NAME = "systemUidAppName";
-    private static final String APP_LABEL = "appLabel";
-    private static final String SETTINGS_APP_NAME = "com.android.settings";
     private static final int TEST_CARRIER_ID = 1191;
     private static final int TEST_SUB_ID = 1111;
 
@@ -117,6 +114,8 @@ public class UtilsTest {
         mTestHandler = new Handler(testLooper.getLooper());
         when(mMockContext.getResources()).thenReturn(mMockResources);
         when(mMockContext.getString(R.string.wifitrackerlib_summary_separator)).thenReturn("/");
+        when(mMockContext.getText(R.string.wifitrackerlib_imsi_protection_warning))
+                .thenReturn("IMSI");
         when(mMockContext.getSystemService(Context.CARRIER_CONFIG_SERVICE))
                 .thenReturn(mCarrierConfigManager);
         when(mMockContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE))
@@ -358,9 +357,45 @@ public class UtilsTest {
         final WifiConfiguration mockWifiConfig = mock(WifiConfiguration.class);
         final WifiEnterpriseConfig mockWifiEnterpriseConfig = mock(WifiEnterpriseConfig.class);
         when(mockWifiEnterpriseConfig.isAuthenticationSimBased()).thenReturn(true);
+        when(mockWifiEnterpriseConfig.getEapMethod()).thenReturn(WifiEnterpriseConfig.Eap.AKA);
         mockWifiConfig.enterpriseConfig = mockWifiEnterpriseConfig;
 
         assertEquals(getImsiProtectionDescription(mMockContext, mockWifiConfig).toString(), "");
+    }
+
+    @Test
+    public void testGetImsiProtectionDescription() {
+        List<SubscriptionInfo> subscriptionInfoList = new ArrayList<>();
+        SubscriptionInfo subscriptionInfo = mock(SubscriptionInfo.class);
+        when(subscriptionInfo.getCarrierId()).thenReturn(TEST_CARRIER_ID);
+        subscriptionInfoList.add(subscriptionInfo);
+        when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subscriptionInfoList);
+        final WifiConfiguration mockWifiConfig = mock(WifiConfiguration.class);
+        final WifiEnterpriseConfig mockWifiEnterpriseConfig = mock(WifiEnterpriseConfig.class);
+        when(mockWifiEnterpriseConfig.isAuthenticationSimBased()).thenReturn(true);
+        when(mockWifiEnterpriseConfig.getEapMethod()).thenReturn(WifiEnterpriseConfig.Eap.AKA);
+        mockWifiConfig.enterpriseConfig = mockWifiEnterpriseConfig;
+        mockWifiConfig.carrierId = TEST_CARRIER_ID;
+
+        assertFalse(getImsiProtectionDescription(mMockContext, mockWifiConfig).toString()
+                .isEmpty());
+    }
+
+    @Test
+    public void testGetImsiProtectionDescription_serverCertNetwork_returnEmptyString() {
+        List<SubscriptionInfo> subscriptionInfoList = new ArrayList<>();
+        SubscriptionInfo subscriptionInfo = mock(SubscriptionInfo.class);
+        when(subscriptionInfo.getCarrierId()).thenReturn(TEST_CARRIER_ID);
+        subscriptionInfoList.add(subscriptionInfo);
+        when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subscriptionInfoList);
+        final WifiConfiguration mockWifiConfig = mock(WifiConfiguration.class);
+        final WifiEnterpriseConfig mockWifiEnterpriseConfig = mock(WifiEnterpriseConfig.class);
+        when(mockWifiEnterpriseConfig.isAuthenticationSimBased()).thenReturn(true);
+        when(mockWifiEnterpriseConfig.isEapMethodServerCertUsed()).thenReturn(true);
+        mockWifiConfig.enterpriseConfig = mockWifiEnterpriseConfig;
+        mockWifiConfig.carrierId = TEST_CARRIER_ID;
+
+        assertEquals("", getImsiProtectionDescription(mMockContext, mockWifiConfig).toString());
     }
 
     @Test
@@ -368,10 +403,10 @@ public class UtilsTest {
         final CharSequence testText = "test text";
 
         final CharSequence output =
-                HiddenApiWrapper.linkifyAnnotation(mMockContext, testText, "id", "url");
+                NonSdkApiWrapper.linkifyAnnotation(mMockContext, testText, "id", "url");
 
         final SpannableString outputSpannableString = new SpannableString(output);
-        assertEquals(output.toString(), testText);
+        assertEquals(output.toString(), testText.toString());
         assertEquals(outputSpannableString.getSpans(0, outputSpannableString.length(),
                 ClickableSpan.class).length, 0);
     }
@@ -450,6 +485,12 @@ public class UtilsTest {
                 WifiInfo.SECURITY_TYPE_PSK, WifiInfo.SECURITY_TYPE_SAE);
 
         scanResult.capabilities = "[EAP/SHA1]";
+        assertThat(getSecurityTypesFromScanResult(scanResult)).containsExactly(
+                WifiInfo.SECURITY_TYPE_EAP);
+
+        // EAP with passpoint capabilities should only map to EAP for StandardWifiEntry.
+        ScanResult passpointScan = spy(scanResult);
+        when(passpointScan.isPasspointNetwork()).thenReturn(true);
         assertThat(getSecurityTypesFromScanResult(scanResult)).containsExactly(
                 WifiInfo.SECURITY_TYPE_EAP);
 

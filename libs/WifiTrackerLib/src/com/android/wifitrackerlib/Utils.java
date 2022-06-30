@@ -595,6 +595,10 @@ public class Utils {
         return name.toString();
     }
 
+    static boolean isServerCertUsedNetwork(@NonNull WifiConfiguration config) {
+        return config.enterpriseConfig != null && config.enterpriseConfig
+                .isEapMethodServerCertUsed();
+    }
     static boolean isSimCredential(@NonNull WifiConfiguration config) {
         return config.enterpriseConfig != null
                 && config.enterpriseConfig.isAuthenticationSimBased();
@@ -651,7 +655,8 @@ public class Utils {
 
     static CharSequence getImsiProtectionDescription(Context context,
             @Nullable WifiConfiguration wifiConfig) {
-        if (context == null || wifiConfig == null || !isSimCredential(wifiConfig)) {
+        if (context == null || wifiConfig == null || !isSimCredential(wifiConfig)
+                || isServerCertUsedNetwork(wifiConfig)) {
             return "";
         }
         int subId;
@@ -667,7 +672,7 @@ public class Utils {
         }
 
         // IMSI protection is not provided, return warning message.
-        return HiddenApiWrapper.linkifyAnnotation(context, context.getText(
+        return NonSdkApiWrapper.linkifyAnnotation(context, context.getText(
                 R.string.wifitrackerlib_imsi_protection_warning), "url",
                 context.getString(R.string.wifitrackerlib_help_url_imsi_protection));
     }
@@ -1003,6 +1008,29 @@ public class Utils {
                 return DevicePolicyManager.WIFI_SECURITY_ENTERPRISE_192;
             default:
                 return DPM_SECURITY_TYPE_UNKNOWN;
+        }
+    }
+
+    /**
+     * Converts a ScanResult.WIFI_STANDARD_ value to a display string if available, or an
+     * empty string if there is no corresponding display string.
+     */
+    public static String getStandardString(@NonNull Context context, int standard) {
+        switch (standard) {
+            case ScanResult.WIFI_STANDARD_LEGACY:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_legacy);
+            case ScanResult.WIFI_STANDARD_11N:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_11n);
+            case ScanResult.WIFI_STANDARD_11AC:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_11ac);
+            case ScanResult.WIFI_STANDARD_11AX:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_11ax);
+            case ScanResult.WIFI_STANDARD_11AD:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_11ad);
+            case ScanResult.WIFI_STANDARD_11BE:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_11be);
+            default:
+                return context.getString(R.string.wifitrackerlib_wifi_standard_unknown);
         }
     }
 }

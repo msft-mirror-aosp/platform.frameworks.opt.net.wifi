@@ -41,7 +41,7 @@
     <string name="wifitrackerlib_private_dns_broken" msgid="6049401148262718707">"K súkromnému serveru DNS sa nepodarilo získať prístup"</string>
     <string name="wifitrackerlib_wifi_connected_cannot_provide_internet" msgid="3803471522215612745">"Pripojené k zariadeniu. Internet nie je možné poskytnúť."</string>
     <string name="wifi_connected_low_quality" msgid="4478331645458058445">"Nízka kvalita"</string>
-    <string name="wifitrackerlib_admin_restricted_network" msgid="5439914801076897515">"Nepovolené vašou organizáciou"</string>
+    <string name="wifitrackerlib_admin_restricted_network" msgid="5439914801076897515">"Nie je povolené vašou organizáciou"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa_wpa2" msgid="4815223667006927841">"WPA/WPA2‑EAP"</string>
     <string name="wifitrackerlib_wifi_security_eap_wpa_wpa2" msgid="6425661975745405271">"WPA/WPA2‑Enterprise"</string>
     <string name="wifitrackerlib_wifi_security_short_eap_wpa3" msgid="6210273302049534874">"WPA3‑EAP"</string>
@@ -71,4 +71,11 @@
     <string name="wifitrackerlib_osu_sign_up_complete" msgid="3279606633343124580">"Registrácia je dokončená. Pripája sa…"</string>
     <string name="wifitrackerlib_imsi_protection_warning" msgid="7202210931586169466">"Táto sieť dostáva jedinečný identifikátor SIM karty, pomocou ktorého je možné sledovať polohu zariadenia. "<annotation id="url">"Ďalšie informácie"</annotation></string>
     <string name="wifitrackerlib_wifi_wont_autoconnect_for_now" msgid="4923161724964349851">"Wi-Fi sa momentálne automaticky nepripojí"</string>
+    <string name="wifitrackerlib_wifi_standard_unknown" msgid="8339211498889012019">"Neznáme"</string>
+    <string name="wifitrackerlib_wifi_standard_legacy" msgid="7760511318791054384">"Staré"</string>
+    <string name="wifitrackerlib_wifi_standard_11n" msgid="2642177213395884818">"Wi‑Fi 4"</string>
+    <string name="wifitrackerlib_wifi_standard_11ac" msgid="4347870672254411383">"Wi‑Fi 5"</string>
+    <string name="wifitrackerlib_wifi_standard_11ax" msgid="4071875115186480116">"Wi‑Fi 6"</string>
+    <string name="wifitrackerlib_wifi_standard_11ad" msgid="4955749187120493383">"WiGig"</string>
+    <string name="wifitrackerlib_wifi_standard_11be" msgid="1886834788680487835">"Wi‑Fi 7"</string>
 </resources>
