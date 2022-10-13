@@ -100,6 +100,7 @@ import android.os.WorkSource;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
+import android.util.EventLog;
 import android.util.Log;
 import android.util.MutableInt;
 import android.util.Slog;
@@ -2961,7 +2962,13 @@ public class WifiServiceImpl extends BaseWifiService {
                 List<WifiConfiguration> networks = mClientModeImpl.syncGetConfiguredNetworks(
                         Binder.getCallingUid(), mClientModeImplChannel, Process.WIFI_UID);
                 if (networks != null) {
+                    EventLog.writeEvent(0x534e4554, "231985227", -1,
+                            "Remove certs for factory reset");
                     for (WifiConfiguration config : networks) {
+                        if (config.isEnterprise()) {
+                            mWifiInjector.getWifiKeyStore().removeKeys(
+                                    config.enterpriseConfig, true);
+                        }
                         removeNetwork(config.networkId, packageName);
                     }
                 }
@@ -2980,6 +2987,9 @@ public class WifiServiceImpl extends BaseWifiService {
             }
 
             mWifiInjector.getClientModeImplHandler().post(() -> {
+                EventLog.writeEvent(0x534e4554, "241927115", -1,
+                        "Reset SoftApConfiguration to default configuration");
+                mWifiApConfigStore.setApConfiguration(null);
                 mWifiInjector.getWifiConfigManager().clearDeletedEphemeralNetworks();
                 mClientModeImpl.clearNetworkRequestUserApprovedAccessPoints();
                 mWifiNetworkSuggestionsManager.clear();
