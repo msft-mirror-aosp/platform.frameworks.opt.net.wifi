@@ -49,10 +49,10 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -61,7 +61,6 @@ import java.util.StringJoiner;
 /**
  * WifiEntry representation of a subscribed Passpoint network, uniquely identified by FQDN.
  */
-@VisibleForTesting
 public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntryCallback {
     static final String TAG = "PasspointWifiEntry";
     public static final String KEY_PREFIX = "PasspointWifiEntry:";
@@ -78,9 +77,8 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     private PasspointConfiguration mPasspointConfig;
     @Nullable private WifiConfiguration mWifiConfig;
     private List<Integer> mTargetSecurityTypes =
-            List.of(SECURITY_TYPE_PASSPOINT_R1_R2, SECURITY_TYPE_PASSPOINT_R3);
+            Arrays.asList(SECURITY_TYPE_PASSPOINT_R1_R2, SECURITY_TYPE_PASSPOINT_R3);
 
-    private boolean mIsRoaming = false;
     private OsuWifiEntry mOsuWifiEntry;
     private boolean mShouldAutoOpenCaptivePortal = false;
 
@@ -194,7 +192,8 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
                             mWifiConfig,
                             mNetworkCapabilities,
                             mIsDefaultNetwork,
-                            mIsLowQuality);
+                            mIsLowQuality,
+                            mConnectivityReport);
                     break;
                 default:
                     Log.e(TAG, "getConnectedState() returned unknown state: " + connectedState);
@@ -474,6 +473,20 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     }
 
     @Override
+    public synchronized String getBandString() {
+        if (mWifiInfo != null) {
+            return Utils.getBandString(mContext, mWifiInfo);
+        }
+        if (!mCurrentHomeScanResults.isEmpty()) {
+            return Utils.getBandString(mContext, mCurrentHomeScanResults.get(0).frequency);
+        }
+        if (!mCurrentRoamingScanResults.isEmpty()) {
+            return Utils.getBandString(mContext, mCurrentHomeScanResults.get(0).frequency);
+        }
+        return "";
+    }
+
+    @Override
     public synchronized boolean isExpired() {
         if (mSubscriptionExpirationTimeInMillis <= 0) {
             // Expiration time not specified.
@@ -499,7 +512,6 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
             @Nullable List<ScanResult> homeScanResults,
             @Nullable List<ScanResult> roamingScanResults)
             throws IllegalArgumentException {
-        mIsRoaming = false;
         mWifiConfig = wifiConfig;
         mCurrentHomeScanResults.clear();
         mCurrentRoamingScanResults.clear();
@@ -511,14 +523,12 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
         }
         if (mWifiConfig != null) {
             List<ScanResult> currentScanResults = new ArrayList<>();
-            ScanResult bestScanResult = null;
             if (homeScanResults != null && !homeScanResults.isEmpty()) {
                 currentScanResults.addAll(homeScanResults);
             } else if (roamingScanResults != null && !roamingScanResults.isEmpty()) {
                 currentScanResults.addAll(roamingScanResults);
-                mIsRoaming = true;
             }
-            bestScanResult = getBestScanResultByLevel(currentScanResults);
+            ScanResult bestScanResult = getBestScanResultByLevel(currentScanResults);
             if (bestScanResult != null) {
                 mWifiConfig.SSID = "\"" + bestScanResult.SSID + "\"";
             }

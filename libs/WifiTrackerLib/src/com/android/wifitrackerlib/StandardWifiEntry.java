@@ -72,7 +72,6 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.core.os.BuildCompat;
 
@@ -82,6 +81,7 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -97,7 +97,6 @@ import java.util.stream.Collectors;
  *
  * This type of WifiEntry can represent both open and saved networks.
  */
-@VisibleForTesting
 public class StandardWifiEntry extends WifiEntry {
     static final String TAG = "StandardWifiEntry";
     public static final String KEY_PREFIX = "StandardWifiEntry:";
@@ -188,10 +187,6 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public synchronized String getSummary(boolean concise) {
-        if (hasAdminRestrictions()) {
-            return mContext.getString(R.string.wifitrackerlib_admin_restricted_network);
-        }
-
         StringJoiner sj = new StringJoiner(mContext.getString(
                 R.string.wifitrackerlib_summary_separator));
 
@@ -212,7 +207,8 @@ public class StandardWifiEntry extends WifiEntry {
                         mTargetWifiConfig,
                         mNetworkCapabilities,
                         mIsDefaultNetwork,
-                        mIsLowQuality);
+                        mIsLowQuality,
+                        mConnectivityReport);
                 break;
             default:
                 Log.e(TAG, "getConnectedState() returned unknown state: " + connectedState);
@@ -259,6 +255,7 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
+    @Nullable
     public synchronized String getMacAddress() {
         if (mWifiInfo != null) {
             final String wifiInfoMac = mWifiInfo.getMacAddress();
@@ -295,6 +292,7 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
+    @Nullable
     public synchronized WifiConfiguration getWifiConfiguration() {
         if (!isSaved()) {
             return null;
@@ -532,6 +530,9 @@ public class StandardWifiEntry extends WifiEntry {
             return;
         }
 
+        // Refresh the current config so we don't overwrite any changes that we haven't gotten
+        // the CONFIGURED_NETWORKS_CHANGED broadcast for yet.
+        refreshTargetWifiConfig();
         if (meteredChoice == METERED_CHOICE_AUTO) {
             mTargetWifiConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NONE;
         } else if (meteredChoice == METERED_CHOICE_METERED) {
@@ -564,7 +565,9 @@ public class StandardWifiEntry extends WifiEntry {
         if (!canSetPrivacy()) {
             return;
         }
-
+        // Refresh the current config so we don't overwrite any changes that we haven't gotten
+        // the CONFIGURED_NETWORKS_CHANGED broadcast for yet.
+        refreshTargetWifiConfig();
         mTargetWifiConfig.macRandomizationSetting = privacy == PRIVACY_RANDOMIZED_MAC
                 ? WifiConfiguration.RANDOMIZATION_AUTO : WifiConfiguration.RANDOMIZATION_NONE;
         mWifiManager.save(mTargetWifiConfig, null /* listener */);
@@ -672,6 +675,17 @@ public class StandardWifiEntry extends WifiEntry {
         }
         if (!mTargetScanResults.isEmpty()) {
             return Utils.getStandardString(mContext, mTargetScanResults.get(0).getWifiStandard());
+        }
+        return "";
+    }
+
+    @Override
+    public synchronized String getBandString() {
+        if (mWifiInfo != null) {
+            return Utils.getBandString(mContext, mWifiInfo);
+        }
+        if (!mTargetScanResults.isEmpty()) {
+            return Utils.getBandString(mContext, mTargetScanResults.get(0).frequency);
         }
         return "";
     }
@@ -801,6 +815,15 @@ public class StandardWifiEntry extends WifiEntry {
                 return mIsEnhancedOpenSupported;
             default:
                 return true;
+        }
+    }
+
+    private void refreshTargetWifiConfig() {
+        for (WifiConfiguration config : mWifiManager.getPrivilegedConfiguredNetworks()) {
+            if (config.networkId == mTargetWifiConfig.networkId) {
+                mTargetWifiConfig = config;
+                break;
+            }
         }
     }
 
@@ -961,7 +984,8 @@ public class StandardWifiEntry extends WifiEntry {
         if (BuildCompat.isAtLeastT() && wifiStandard == ScanResult.WIFI_STANDARD_11BE) {
             description.append(",mldMac=").append(scanResult.getApMldMacAddress());
             description.append(",linkId=").append(scanResult.getApMloLinkId());
-            description.append(",affLinks=").append(scanResult.getAffiliatedMloLinks());
+            description.append(",affLinks=").append(
+                    Arrays.toString(scanResult.getAffiliatedMloLinks().toArray()));
         }
         final int ageSeconds = (int) (nowMs - scanResult.timestamp / 1000) / 1000;
         description.append(",").append(ageSeconds).append("s");
@@ -1009,7 +1033,7 @@ public class StandardWifiEntry extends WifiEntry {
                 }
             }
             //check SSID restriction
-            WifiSsidPolicy policy = mDevicePolicyManager.getWifiSsidPolicy();
+            WifiSsidPolicy policy = NonSdkApiWrapper.getWifiSsidPolicy(mDevicePolicyManager);
             if (policy != null) {
                 int policyType = policy.getPolicyType();
                 Set<WifiSsid> ssids = policy.getSsids();

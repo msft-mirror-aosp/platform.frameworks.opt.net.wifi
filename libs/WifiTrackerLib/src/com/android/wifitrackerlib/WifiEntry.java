@@ -23,6 +23,7 @@ import static androidx.core.util.Preconditions.checkNotNull;
 import static com.android.wifitrackerlib.Utils.getNetworkPart;
 import static com.android.wifitrackerlib.Utils.getSingleSecurityTypeFromMultipleSecurityTypes;
 
+import android.net.ConnectivityDiagnosticsManager;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
@@ -39,8 +40,8 @@ import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
+import androidx.core.os.BuildCompat;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -49,6 +50,7 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -219,8 +221,7 @@ public class WifiEntry {
     public static Comparator<WifiEntry> TITLE_COMPARATOR =
             Comparator.comparing((WifiEntry entry) -> entry.getTitle());
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
-    final boolean mForSavedNetworksPage;
+    protected final boolean mForSavedNetworksPage;
 
     protected final WifiManager mWifiManager;
 
@@ -232,6 +233,7 @@ public class WifiEntry {
     protected WifiInfo mWifiInfo;
     protected NetworkInfo mNetworkInfo;
     protected NetworkCapabilities mNetworkCapabilities;
+    protected ConnectivityDiagnosticsManager.ConnectivityReport mConnectivityReport;
     protected ConnectedInfo mConnectedInfo;
 
     protected ConnectCallback mConnectCallback;
@@ -241,7 +243,6 @@ public class WifiEntry {
     protected boolean mCalledConnect = false;
     protected boolean mCalledDisconnect = false;
 
-    private boolean mIsValidated;
     protected boolean mIsDefaultNetwork;
     protected boolean mIsLowQuality;
 
@@ -327,7 +328,9 @@ public class WifiEntry {
      */
     public boolean shouldShowXLevelIcon() {
         return getConnectedState() != CONNECTED_STATE_DISCONNECTED
-                && (!mIsValidated || !mIsDefaultNetwork) && !canSignIn();
+                && mConnectivityReport != null
+                && (!hasInternetAccess() || !mIsDefaultNetwork)
+                && !canSignIn();
     }
 
     /**
@@ -335,7 +338,8 @@ public class WifiEntry {
      * Note: This does not necessarily mean the network is the default route.
      */
     public boolean hasInternetAccess() {
-        return mIsValidated;
+        return mNetworkCapabilities != null
+                && mNetworkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
     }
 
     /**
@@ -607,6 +611,11 @@ public class WifiEntry {
         return "";
     }
 
+    /** Returns the string displayed for the Wi-Fi band */
+    public String getBandString() {
+        return "";
+    }
+
     /** Returns whether subscription of the entry is expired */
     public boolean isExpired() {
         return false;
@@ -662,8 +671,8 @@ public class WifiEntry {
     String getNetworkCapabilityDescription() {
         final StringBuilder sb = new StringBuilder();
         if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
-            sb.append("isValidated:")
-                    .append(mIsValidated)
+            sb.append("hasInternet:")
+                    .append(hasInternetAccess())
                     .append(", isDefaultNetwork:")
                     .append(mIsDefaultNetwork)
                     .append(", isLowQuality:")
@@ -859,7 +868,7 @@ public class WifiEntry {
             mNetworkInfo = null;
             mNetworkCapabilities = null;
             mConnectedInfo = null;
-            mIsValidated = false;
+            mConnectivityReport = null;
             mIsDefaultNetwork = false;
             mIsLowQuality = false;
             if (mCalledDisconnect) {
@@ -905,7 +914,7 @@ public class WifiEntry {
                             new byte[]{(byte) 255, (byte) 255, (byte) 255, (byte) 255});
                     mConnectedInfo.subnetMask = getNetworkPart(
                             all, addr.getPrefixLength()).getHostAddress();
-                } catch (UnknownHostException e) {
+                } catch (UnknownHostException | IllegalArgumentException e) {
                     // Leave subnet null;
                 }
             } else if (addr.getAddress() instanceof Inet6Address) {
@@ -949,8 +958,14 @@ public class WifiEntry {
             return;
         }
         mConnectedInfo.networkCapabilities = mNetworkCapabilities;
-        mIsValidated = mNetworkCapabilities != null
-                && mNetworkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        notifyOnUpdated();
+    }
+
+    // Method for WifiTracker to update a connected WifiEntry's validation status.
+    @WorkerThread
+    synchronized void updateConnectivityReport(
+            @Nullable ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport) {
+        mConnectivityReport = connectivityReport;
         notifyOnUpdated();
     }
 
@@ -969,6 +984,12 @@ public class WifiEntry {
             sj.add(String.format("%.1f,", mWifiInfo.getRetriedTxPacketsPerSecond()));
             sj.add(String.format("%.1f ", mWifiInfo.getLostTxPacketsPerSecond()));
             sj.add(String.format("rx=%.1f", mWifiInfo.getSuccessfulRxPacketsPerSecond()));
+            if (BuildCompat.isAtLeastT() && mWifiInfo.getApMldMacAddress() != null) {
+                sj.add("mldMac = " + mWifiInfo.getApMldMacAddress());
+                sj.add("linkId = " + mWifiInfo.getApMloLinkId());
+                sj.add("affLinks = " + Arrays.toString(
+                        mWifiInfo.getAffiliatedMloLinks().toArray()));
+            }
         }
         return sj.toString();
     }
@@ -1059,8 +1080,8 @@ public class WifiEntry {
                 .append(getConnectedState() == CONNECTED_STATE_CONNECTED ? "true" : "false")
                 .append(",connectedInfo:")
                 .append(getConnectedInfo())
-                .append(",isValidated:")
-                .append(mIsValidated)
+                .append(",hasInternet:")
+                .append(hasInternetAccess())
                 .append(",isDefaultNetwork:")
                 .append(mIsDefaultNetwork)
                 .toString();

@@ -26,13 +26,16 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityDiagnosticsManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
+import android.net.wifi.MloLink;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiScanner;
 import android.os.Build;
 import android.os.PersistableBundle;
 import android.os.UserHandle;
@@ -47,6 +50,7 @@ import android.util.Pair;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import androidx.core.os.BuildCompat;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -60,6 +64,10 @@ import java.util.StringJoiner;
  * Utility methods for WifiTrackerLib.
  */
 public class Utils {
+    // TODO(b/242144920): remove this after publishing this reason in U.
+    // This reason is added in U and hidden in T, using a hard-coded value first.
+    public static final int DISABLED_TRANSITION_DISABLE_INDICATION = 13;
+
     // Returns the ScanResult with the best RSSI from a list of ScanResults.
     @Nullable
     public static ScanResult getBestScanResultByLevel(@NonNull List<ScanResult> scanResults) {
@@ -70,7 +78,7 @@ public class Utils {
 
     // Returns a list of WifiInfo SECURITY_TYPE_* supported by a ScanResult.
     @NonNull
-    static List<Integer> getSecurityTypesFromScanResult(@NonNull ScanResult scanResult) {
+    public static List<Integer> getSecurityTypesFromScanResult(@NonNull ScanResult scanResult) {
         List<Integer> securityTypes = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             for (int securityType : scanResult.getSecurityTypes()) {
@@ -225,7 +233,8 @@ public class Utils {
             WifiConfiguration wifiConfiguration,
             NetworkCapabilities networkCapabilities,
             boolean isDefaultNetwork,
-            boolean isLowQuality) {
+            boolean isLowQuality,
+            ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport) {
         final StringJoiner sj = new StringJoiner(context.getString(
                 R.string.wifitrackerlib_summary_separator));
 
@@ -251,8 +260,9 @@ public class Utils {
         }
 
         // For displaying network capability info, such as captive portal or no internet
-        String networkCapabilitiesInformation =
-                getCurrentNetworkCapabilitiesInformation(context,  networkCapabilities);
+        String networkCapabilitiesInformation = getCurrentNetworkCapabilitiesInformation(
+                context,  networkCapabilities, connectivityReport,
+                wifiConfiguration != null && wifiConfiguration.isNoInternetAccessExpected());
         if (!TextUtils.isEmpty(networkCapabilitiesInformation)) {
             sj.add(networkCapabilitiesInformation);
         }
@@ -382,6 +392,9 @@ public class Utils {
                 case WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_PERMANENT:
                 case WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY:
                     return context.getString(R.string.wifitrackerlib_wifi_no_internet_no_reconnect);
+                case DISABLED_TRANSITION_DISABLE_INDICATION:
+                    return context.getString(
+                            R.string.wifitrackerlib_wifi_disabled_transition_disable_indication);
                 default:
                     break;
             }
@@ -507,8 +520,10 @@ public class Utils {
         return description.toString();
     }
 
-    static String getCurrentNetworkCapabilitiesInformation(Context context,
-            NetworkCapabilities networkCapabilities) {
+    static String getCurrentNetworkCapabilitiesInformation(@Nullable Context context,
+            @Nullable NetworkCapabilities networkCapabilities,
+            @Nullable ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport,
+            boolean noInternetExpected) {
         if (context == null || networkCapabilities == null) {
             return "";
         }
@@ -524,11 +539,23 @@ public class Utils {
         }
 
         if (!networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+            if (connectivityReport == null && !noInternetExpected) {
+                return context.getString(R.string.wifitrackerlib_checking_for_internet_access);
+            }
             if (networkCapabilities.isPrivateDnsBroken()) {
                 return context.getString(R.string.wifitrackerlib_private_dns_broken);
             }
-            return context.getString(
-                R.string.wifitrackerlib_wifi_connected_cannot_provide_internet);
+            if (noInternetExpected) {
+                return context.getString(
+                        R.string.wifitrackerlib_wifi_connected_cannot_provide_internet);
+            }
+            // Connected / No internet access
+            final StringJoiner sj = new StringJoiner(context.getString(
+                    R.string.wifitrackerlib_summary_separator));
+            sj.add(context.getResources().getStringArray(R.array.wifitrackerlib_wifi_status)
+                    [DetailedState.CONNECTED.ordinal()]);
+            sj.add(context.getString(R.string.wifitrackerlib_wifi_no_internet));
+            return sj.toString();
         }
         return "";
     }
@@ -865,7 +892,7 @@ public class Utils {
         try {
             netPart = InetAddress.getByAddress(array);
         } catch (UnknownHostException e) {
-            throw new RuntimeException("getNetworkPart error - " + e.toString());
+            throw new IllegalArgumentException("getNetworkPart error - " + e.toString());
         }
         return netPart;
     }
@@ -875,7 +902,7 @@ public class Utils {
      */
     public static void maskRawAddress(byte[] array, int prefixLength) {
         if (prefixLength < 0 || prefixLength > array.length * 8) {
-            throw new RuntimeException("IP address with " + array.length
+            throw new IllegalArgumentException("IP address with " + array.length
                     + " bytes has invalid prefix length " + prefixLength);
         }
 
@@ -883,7 +910,9 @@ public class Utils {
         int remainder = prefixLength % 8;
         byte mask = (byte) (0xFF << (8 - remainder));
 
-        if (offset < array.length) array[offset] = (byte) (array[offset] & mask);
+        if (offset < array.length) {
+            array[offset] = (byte) (array[offset] & mask);
+        }
 
         offset++;
 
@@ -1012,8 +1041,7 @@ public class Utils {
     }
 
     /**
-     * Converts a ScanResult.WIFI_STANDARD_ value to a display string if available, or an
-     * empty string if there is no corresponding display string.
+     * Converts a ScanResult.WIFI_STANDARD_ value to a display string.
      */
     public static String getStandardString(@NonNull Context context, int standard) {
         switch (standard) {
@@ -1032,5 +1060,60 @@ public class Utils {
             default:
                 return context.getString(R.string.wifitrackerlib_wifi_standard_unknown);
         }
+    }
+
+    /**
+     * Converts a frequency in MHz to the display string of the corresponding Wi-Fi band.
+     */
+    public static String getBandString(@NonNull Context context, int freqMhz) {
+        if (freqMhz >= WifiEntry.MIN_FREQ_24GHZ && freqMhz < WifiEntry.MAX_FREQ_24GHZ) {
+            return context.getResources().getString(R.string.wifitrackerlib_wifi_band_24_ghz);
+        } else if (freqMhz >= WifiEntry.MIN_FREQ_5GHZ && freqMhz < WifiEntry.MAX_FREQ_5GHZ) {
+            return context.getResources().getString(R.string.wifitrackerlib_wifi_band_5_ghz);
+        } else if (freqMhz >= WifiEntry.MIN_FREQ_6GHZ && freqMhz < WifiEntry.MAX_FREQ_6GHZ) {
+            return context.getResources().getString(R.string.wifitrackerlib_wifi_band_6_ghz);
+        } else {
+            return context.getResources().getString(R.string.wifitrackerlib_wifi_band_unknown);
+        }
+    }
+
+    /**
+     * Converts the band info in WifiInfo to the display string of the corresponding Wi-Fi band(s).
+     */
+    public static String getBandString(@NonNull Context context, @NonNull WifiInfo wifiInfo) {
+        if (!BuildCompat.isAtLeastU()) {
+            return getBandString(context, wifiInfo.getFrequency());
+        }
+
+        StringJoiner sj = new StringJoiner(
+                context.getResources().getString(R.string.wifitrackerlib_multiband_separator));
+        wifiInfo.getAssociatedMloLinks().stream()
+                .filter((link) -> link.getState() == MloLink.MLO_LINK_STATE_ACTIVE)
+                .map(MloLink::getBand)
+                .distinct()
+                .sorted()
+                .forEach((band) -> {
+                    switch (band) {
+                        case WifiScanner.WIFI_BAND_24_GHZ:
+                            sj.add(context.getResources()
+                                    .getString(R.string.wifitrackerlib_wifi_band_24_ghz));
+                            break;
+                        case WifiScanner.WIFI_BAND_5_GHZ:
+                            sj.add(context.getResources()
+                                    .getString(R.string.wifitrackerlib_wifi_band_5_ghz));
+                            break;
+                        case WifiScanner.WIFI_BAND_6_GHZ:
+                            sj.add(context.getResources()
+                                    .getString(R.string.wifitrackerlib_wifi_band_6_ghz));
+                            break;
+                        default:
+                            sj.add(context.getResources()
+                                    .getString(R.string.wifitrackerlib_wifi_band_unknown));
+                    }
+                });
+        if (sj.length() == 0) {
+            return getBandString(context, wifiInfo.getFrequency());
+        }
+        return sj.toString();
     }
 }

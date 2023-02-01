@@ -17,6 +17,7 @@
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <string name="wifitrackerlib_summary_separator" msgid="6613897475167609815">" / "</string>
+    <string name="wifitrackerlib_checking_for_internet_access" msgid="4787495471423429472">"Đang kiểm tra kết nối Internet..."</string>
     <string name="wifitrackerlib_auto_connect_disable" msgid="4714835547164460651">"Tính năng tự động kết nối đang tắt"</string>
     <string name="wifitrackerlib_saved_network" msgid="5353460010746484376">"Do ứng dụng <xliff:g id="NAME">%1$s</xliff:g> lưu"</string>
     <string name="wifitrackerlib_wifi_no_internet_no_reconnect" msgid="6618216332537706908">"Sẽ không tự động kết nối"</string>
@@ -24,6 +25,7 @@
     <string name="wifitrackerlib_wifi_disabled_password_failure" msgid="2850244218754633550">"Sự cố xác thực"</string>
     <string name="wifitrackerlib_wifi_check_password_try_again" msgid="2327777719175574699">"Kiểm tra mật khẩu và thử lại"</string>
     <string name="wifitrackerlib_wifi_disabled_network_failure" msgid="3046956554224277166">"Lỗi cấu hình IP"</string>
+    <string name="wifitrackerlib_wifi_disabled_transition_disable_indication" msgid="6416221593061166867">"Không sử dụng được với cài đặt bảo mật hiện tại"</string>
     <string name="wifitrackerlib_wifi_disabled_generic" msgid="4278806060337007814">"Đã tắt"</string>
     <string name="wifitrackerlib_wifi_ap_unable_to_handle_new_sta" msgid="931922372010639716">"Điểm truy cập đã tạm thời đạt đến giới hạn số lượng thiết bị truy cập"</string>
     <string name="wifitrackerlib_wifi_poor_channel_conditions" msgid="26484680900376236">"Tình trạng mạng kém tạm thời"</string>
@@ -78,4 +80,8 @@
     <string name="wifitrackerlib_wifi_standard_11ax" msgid="4071875115186480116">"Wi‑Fi 6"</string>
     <string name="wifitrackerlib_wifi_standard_11ad" msgid="4955749187120493383">"WiGig"</string>
     <string name="wifitrackerlib_wifi_standard_11be" msgid="1886834788680487835">"Wi‑Fi 7"</string>
+    <string name="wifitrackerlib_wifi_band_unknown" msgid="5576746583228374334">"Không rõ"</string>
+    <string name="wifitrackerlib_wifi_band_24_ghz" msgid="5374362780653321244">"2,4 GHz"</string>
+    <string name="wifitrackerlib_wifi_band_5_ghz" msgid="2179047349922091556">"5 GHz"</string>
+    <string name="wifitrackerlib_wifi_band_6_ghz" msgid="6532408050869498777">"6 GHz"</string>
 </resources>
