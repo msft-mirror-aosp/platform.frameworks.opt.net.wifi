@@ -165,15 +165,13 @@ public class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
 
         long scanAgeWindow = mMaxScanAgeMillis;
         if (lastScanSucceeded) {
-            mScanResultUpdater.update(mWifiManager.getScanResults());
+            cacheNewScanResults();
         } else {
             // Scan failed, increase scan age window to prevent WifiEntry list from
             // clearing prematurely.
             scanAgeWindow += mScanIntervalMillis;
         }
-        mChosenEntry.updateScanResultInfo(mScanResultUpdater.getScanResults(scanAgeWindow).stream()
-                .filter(scan -> new ScanResultKey(scan).equals(mKey.getScanResultKey()))
-                .collect(toList()));
+        mChosenEntry.updateScanResultInfo(mScanResultUpdater.getScanResults(scanAgeWindow));
     }
 
     /**
@@ -185,6 +183,15 @@ public class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
                 mWifiManager.getPrivilegedConfiguredNetworks().stream()
                         .filter(this::configMatches)
                         .collect(toList()));
+    }
+
+    /**
+     * Updates ScanResultUpdater with new ScanResults matching mChosenEntry.
+     */
+    private void cacheNewScanResults() {
+        mScanResultUpdater.update(mWifiManager.getScanResults().stream()
+                .filter(scan -> new ScanResultKey(scan).equals(mKey.getScanResultKey()))
+                .collect(toList()));
     }
 
     private boolean configMatches(@NonNull WifiConfiguration config) {
