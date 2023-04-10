@@ -93,13 +93,14 @@ class NonSdkApiWrapper {
     }
 
     /**
-     * Returns whether or not the network capabilities is determined to be VCN over Wi-Fi or not.
+     * Tries to get WifiInfo from network capabilities if it is VCN-over-Wifi.
      */
-    static boolean isVcnOverWifi(@NonNull NetworkCapabilities networkCapabilities) {
+    static WifiInfo getVcnWifiInfo(@NonNull NetworkCapabilities networkCapabilities) {
         TransportInfo transportInfo = networkCapabilities.getTransportInfo();
-        return transportInfo != null
-                && transportInfo instanceof VcnTransportInfo
-                && ((VcnTransportInfo) transportInfo).getWifiInfo() != null;
+        if (transportInfo instanceof VcnTransportInfo) {
+            return ((VcnTransportInfo) transportInfo).getWifiInfo();
+        }
+        return null;
     }
 
     /**
@@ -124,6 +125,14 @@ class NonSdkApiWrapper {
      */
     static boolean isPrimary(@NonNull WifiInfo wifiInfo) {
         return wifiInfo.isPrimary();
+    }
+
+    /**
+     * Returns true if the NetworkCapabilities is OEM_PAID or OEM_PRIVATE
+     */
+    static boolean isOemCapabilities(@NonNull NetworkCapabilities capabilities) {
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_OEM_PAID)
+                || capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_OEM_PRIVATE);
     }
 
     /**
