@@ -58,12 +58,12 @@ class NonSdkApiWrapper {
     }
 
     /**
-     * Returns whether or not the network capabilities is determined to be VCN over Wi-Fi or not.
+     * Tries to get WifiInfo from network capabilities if it is VCN-over-Wifi.
      */
-    static boolean isVcnOverWifi(@NonNull NetworkCapabilities networkCapabilities) {
+    static WifiInfo getVcnWifiInfo(@NonNull NetworkCapabilities networkCapabilities) {
         // This is only useful for treating CELLULAR over WIFI as a carrier merged network in
         // provider model Settings. Since SUW doesn't use the provider model, this is not used.
-        return false;
+        return null;
     }
 
     /**
@@ -95,6 +95,16 @@ class NonSdkApiWrapper {
         //                    access, which SUW does not hold. Always return true (WifiTracker1
         //                    behavior) until SUW can access this field.
         return true;
+    }
+
+    /**
+     * Returns true if the NetworkCapabilities is OEM_PAID or OEM_PRIVATE
+     */
+    static boolean isOemCapabilities(@NonNull NetworkCapabilities capabilities) {
+        // SUW can't access NET_CAPABILITY_OEM_PAID or NET_CAPABILITY_OEM_PRIVATE since they aren't
+        // public APIs. Return false here since we don't need to worry about secondary OEM networks
+        // in SUW for now.
+        return false;
     }
 
     /**
