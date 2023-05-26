@@ -16,6 +16,7 @@
 
 package com.android.wifitrackerlib;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE;
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_PERMANENTLY_DISABLED;
 
@@ -30,6 +31,7 @@ import android.net.ConnectivityDiagnosticsManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
+import android.net.TransportInfo;
 import android.net.wifi.MloLink;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
@@ -199,9 +201,13 @@ public class Utils {
      */
     static int getSingleSecurityTypeFromMultipleSecurityTypes(
             @NonNull List<Integer> securityTypes) {
+        if (securityTypes.size() == 0) {
+            return WifiInfo.SECURITY_TYPE_UNKNOWN;
+        }
         if (securityTypes.size() == 1) {
             return securityTypes.get(0);
-        } else if (securityTypes.size() == 2) {
+        }
+        if (securityTypes.size() == 2) {
             if (securityTypes.contains(WifiInfo.SECURITY_TYPE_OPEN)) {
                 return WifiInfo.SECURITY_TYPE_OPEN;
             }
@@ -212,7 +218,8 @@ public class Utils {
                 return WifiInfo.SECURITY_TYPE_EAP;
             }
         }
-        return WifiInfo.SECURITY_TYPE_UNKNOWN;
+        // Default to the first security type if we don't need any special mapping.
+        return securityTypes.get(0);
     }
 
     /**
@@ -229,15 +236,16 @@ public class Utils {
         }
     }
 
-    static String getConnectedDescription(Context context,
-            WifiConfiguration wifiConfiguration,
-            NetworkCapabilities networkCapabilities,
+    static String getConnectedDescription(@NonNull Context context,
+            @Nullable WifiConfiguration wifiConfiguration,
+            @Nullable NetworkCapabilities networkCapabilities,
             boolean isDefaultNetwork,
             boolean isLowQuality,
-            ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport) {
+            @Nullable ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport) {
         final StringJoiner sj = new StringJoiner(context.getString(
                 R.string.wifitrackerlib_summary_separator));
 
+        boolean shouldShowConnected = isDefaultNetwork;
         if (wifiConfiguration != null
                 && (wifiConfiguration.fromWifiNetworkSuggestion
                 || wifiConfiguration.fromWifiNetworkSpecifier)) {
@@ -245,32 +253,67 @@ public class Utils {
             final String suggestionOrSpecifierLabel =
                     getSuggestionOrSpecifierLabel(context, wifiConfiguration);
             if (!TextUtils.isEmpty(suggestionOrSpecifierLabel)) {
-                if (!isDefaultNetwork) {
-                    sj.add(context.getString(R.string.wifitrackerlib_available_via_app,
-                            suggestionOrSpecifierLabel));
-                } else {
+                if (isDefaultNetwork || (networkCapabilities != null
+                        && NonSdkApiWrapper.isOemCapabilities(networkCapabilities))) {
                     sj.add(context.getString(R.string.wifitrackerlib_connected_via_app,
                             suggestionOrSpecifierLabel));
+                } else {
+                    // Pretend that non-default, non-OEM networks are unconnected.
+                    sj.add(context.getString(R.string.wifitrackerlib_available_via_app,
+                            suggestionOrSpecifierLabel));
                 }
+                shouldShowConnected = false;
             }
         }
 
         if (isLowQuality) {
             sj.add(context.getString(R.string.wifi_connected_low_quality));
+            shouldShowConnected = false;
         }
 
         // For displaying network capability info, such as captive portal or no internet
-        String networkCapabilitiesInformation = getCurrentNetworkCapabilitiesInformation(
-                context,  networkCapabilities, connectivityReport,
-                wifiConfiguration != null && wifiConfiguration.isNoInternetAccessExpected());
-        if (!TextUtils.isEmpty(networkCapabilitiesInformation)) {
-            sj.add(networkCapabilitiesInformation);
+        if (networkCapabilities != null) {
+            if (networkCapabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+                // "Sign in to network"
+                sj.add(context.getString(context.getResources()
+                        .getIdentifier("network_available_sign_in", "string", "android")));
+                shouldShowConnected = false;
+            } else if (networkCapabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_PARTIAL_CONNECTIVITY)) {
+                // "Limited connection..."
+                sj.add(context.getString(
+                        R.string.wifitrackerlib_wifi_limited_connection));
+                shouldShowConnected = false;
+            } else if (!networkCapabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                boolean noInternetExpected = wifiConfiguration != null
+                        && wifiConfiguration.isNoInternetAccessExpected();
+                if (connectivityReport == null && !noInternetExpected) {
+                    // "Checking for internet access..."
+                    sj.add(context.getString(R.string.wifitrackerlib_checking_for_internet_access));
+                    shouldShowConnected = false;
+                } else if (networkCapabilities.isPrivateDnsBroken()) {
+                    // "Private DNS server cannot be accessed"
+                    sj.add(context.getString(R.string.wifitrackerlib_private_dns_broken));
+                    shouldShowConnected = false;
+                } else if (noInternetExpected) {
+                    // "Connected to device. Can't provide internet."
+                    sj.add(context.getString(
+                            R.string.wifitrackerlib_wifi_connected_cannot_provide_internet));
+                    shouldShowConnected = false;
+                } else {
+                    // "No internet access"
+                    sj.add(context.getString(R.string.wifitrackerlib_wifi_no_internet));
+                }
+            }
         }
 
-        // Default to "Connected" if nothing else to display
-        if (sj.length() == 0 && isDefaultNetwork) {
-            return context.getResources().getStringArray(R.array.wifitrackerlib_wifi_status)
-                    [DetailedState.CONNECTED.ordinal()];
+        // Show "Connected" first if we haven't hidden it due to other strings.
+        if (shouldShowConnected) {
+            return new StringJoiner(context.getString(R.string.wifitrackerlib_summary_separator))
+                    .add(context.getResources().getStringArray(R.array.wifitrackerlib_wifi_status)
+                            [DetailedState.CONNECTED.ordinal()]).merge(sj).toString();
         }
 
         return sj.toString();
@@ -366,37 +409,51 @@ public class Utils {
         }
 
         // Check for any failure messages to display
+        NetworkSelectionStatus networkSelectionStatus =
+                wifiConfiguration.getNetworkSelectionStatus();
         if (wifiConfiguration.hasNoInternetAccess()) {
-            int messageID =
-                    wifiConfiguration.getNetworkSelectionStatus().getNetworkSelectionStatus()
-                            == NETWORK_SELECTION_PERMANENTLY_DISABLED
-                            ? R.string.wifitrackerlib_wifi_no_internet_no_reconnect
-                            : R.string.wifitrackerlib_wifi_no_internet;
-            return context.getString(messageID);
-        } else if (wifiConfiguration.getNetworkSelectionStatus().getNetworkSelectionStatus()
-                != NETWORK_SELECTION_ENABLED) {
-            WifiConfiguration.NetworkSelectionStatus networkStatus =
-                    wifiConfiguration.getNetworkSelectionStatus();
-            switch (networkStatus.getNetworkSelectionDisableReason()) {
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE:
-                case WifiConfiguration.NetworkSelectionStatus
-                        .DISABLED_AUTHENTICATION_NO_SUBSCRIPTION:
+            if (networkSelectionStatus.getNetworkSelectionStatus()
+                    == NETWORK_SELECTION_PERMANENTLY_DISABLED) {
+                return context.getString(R.string.wifitrackerlib_wifi_no_internet_no_reconnect);
+            }
+            return context.getString(R.string.wifitrackerlib_wifi_no_internet);
+        }
+        if (networkSelectionStatus.getNetworkSelectionStatus() != NETWORK_SELECTION_ENABLED) {
+            switch (networkSelectionStatus.getNetworkSelectionDisableReason()) {
+                case NetworkSelectionStatus.DISABLED_CONSECUTIVE_FAILURES:
+                    if (!networkSelectionStatus.hasEverConnected()
+                            && networkSelectionStatus.getDisableReasonCounter(
+                                    NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE) > 0) {
+                        return context.getString(
+                                R.string.wifitrackerlib_wifi_disabled_password_failure);
+                    }
+                    break;
+                case NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE:
+                case NetworkSelectionStatus.DISABLED_AUTHENTICATION_NO_CREDENTIALS:
+                case NetworkSelectionStatus.DISABLED_AUTHENTICATION_NO_SUBSCRIPTION:
                     return context.getString(
                             R.string.wifitrackerlib_wifi_disabled_password_failure);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD:
+                case NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD:
                     return context.getString(R.string.wifitrackerlib_wifi_check_password_try_again);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_DHCP_FAILURE:
+                case NetworkSelectionStatus.DISABLED_DHCP_FAILURE:
                     return context.getString(R.string.wifitrackerlib_wifi_disabled_network_failure);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_ASSOCIATION_REJECTION:
+                case NetworkSelectionStatus.DISABLED_ASSOCIATION_REJECTION:
                     return context.getString(R.string.wifitrackerlib_wifi_disabled_generic);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_PERMANENT:
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY:
+                case NetworkSelectionStatus.DISABLED_NO_INTERNET_PERMANENT:
+                case NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY:
                     return context.getString(R.string.wifitrackerlib_wifi_no_internet_no_reconnect);
                 case DISABLED_TRANSITION_DISABLE_INDICATION:
                     return context.getString(
                             R.string.wifitrackerlib_wifi_disabled_transition_disable_indication);
                 default:
                     break;
+            }
+        } else { // NETWORK_SELECTION_ENABLED
+            // Show failure message if we've gotten AUTHENTICATION_FAILURE and have never connected
+            // before, which usually indicates the credentials are wrong.
+            if (networkSelectionStatus.getDisableReasonCounter(DISABLED_AUTHENTICATION_FAILURE) > 0
+                    && !networkSelectionStatus.hasEverConnected()) {
+                return context.getString(R.string.wifitrackerlib_wifi_disabled_password_failure);
             }
         }
         switch (wifiConfiguration.getRecentFailureReason()) {
@@ -518,46 +575,6 @@ public class Utils {
                     .append(disableReasonCounter);
         }
         return description.toString();
-    }
-
-    static String getCurrentNetworkCapabilitiesInformation(@Nullable Context context,
-            @Nullable NetworkCapabilities networkCapabilities,
-            @Nullable ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport,
-            boolean noInternetExpected) {
-        if (context == null || networkCapabilities == null) {
-            return "";
-        }
-
-        if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
-            return context.getString(context.getResources()
-                    .getIdentifier("network_available_sign_in", "string", "android"));
-        }
-
-        if (networkCapabilities.hasCapability(
-                NetworkCapabilities.NET_CAPABILITY_PARTIAL_CONNECTIVITY)) {
-            return context.getString(R.string.wifitrackerlib_wifi_limited_connection);
-        }
-
-        if (!networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-            if (connectivityReport == null && !noInternetExpected) {
-                return context.getString(R.string.wifitrackerlib_checking_for_internet_access);
-            }
-            if (networkCapabilities.isPrivateDnsBroken()) {
-                return context.getString(R.string.wifitrackerlib_private_dns_broken);
-            }
-            if (noInternetExpected) {
-                return context.getString(
-                        R.string.wifitrackerlib_wifi_connected_cannot_provide_internet);
-            }
-            // Connected / No internet access
-            final StringJoiner sj = new StringJoiner(context.getString(
-                    R.string.wifitrackerlib_summary_separator));
-            sj.add(context.getResources().getStringArray(R.array.wifitrackerlib_wifi_status)
-                    [DetailedState.CONNECTED.ordinal()]);
-            sj.add(context.getString(R.string.wifitrackerlib_wifi_no_internet));
-            return sj.toString();
-        }
-        return "";
     }
 
     /**
@@ -1115,5 +1132,16 @@ public class Utils {
             return getBandString(context, wifiInfo.getFrequency());
         }
         return sj.toString();
+    }
+
+    /**
+     * Gets the WifiInfo from a NetworkCapabilities if there is one.
+     */
+    public static WifiInfo getWifiInfo(@NonNull NetworkCapabilities capabilities) {
+        TransportInfo transportInfo = capabilities.getTransportInfo();
+        if (transportInfo instanceof WifiInfo) {
+            return (WifiInfo) transportInfo;
+        }
+        return NonSdkApiWrapper.getVcnWifiInfo(capabilities);
     }
 }
