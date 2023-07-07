@@ -52,11 +52,13 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.wifi.MloLink;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
 import android.os.Handler;
 import android.os.SystemClock;
@@ -81,7 +83,6 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -961,7 +962,7 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     // TODO(b/227622961): Remove the suppression once the linter recognizes BuildCompat.isAtLeastT()
-    @SuppressLint("NewApi")
+    @SuppressLint({"NewApi", "SwitchIntDef"})
     private synchronized String getScanResultDescription(ScanResult scanResult, long nowMs) {
         final StringBuilder description = new StringBuilder();
         description.append(" \n{");
@@ -976,8 +977,35 @@ public class StandardWifiEntry extends WifiEntry {
         if (BuildCompat.isAtLeastT() && wifiStandard == ScanResult.WIFI_STANDARD_11BE) {
             description.append(",mldMac=").append(scanResult.getApMldMacAddress());
             description.append(",linkId=").append(scanResult.getApMloLinkId());
-            description.append(",affLinks=").append(
-                    Arrays.toString(scanResult.getAffiliatedMloLinks().toArray()));
+            description.append(",affLinks=");
+            StringJoiner affLinks = new StringJoiner(",", "[", "]");
+            for (MloLink link : scanResult.getAffiliatedMloLinks()) {
+                final int scanResultBand;
+                switch (link.getBand()) {
+                    case WifiScanner.WIFI_BAND_24_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_24_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_5_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_5_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_6_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_6_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_60_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_60_GHZ;
+                        break;
+                    default:
+                        Log.e(TAG, "Unknown MLO link band: " + link.getBand());
+                        scanResultBand = ScanResult.UNSPECIFIED;
+                        break;
+                }
+                affLinks.add(new StringJoiner(",", "{", "}")
+                        .add("apMacAddr=" + link.getApMacAddress())
+                        .add("freq=" + ScanResult.convertChannelToFrequencyMhzIfSupported(
+                                link.getChannel(), scanResultBand))
+                        .toString());
+            }
+            description.append(affLinks.toString());
         }
         final int ageSeconds = (int) (nowMs - scanResult.timestamp / 1000) / 1000;
         description.append(",").append(ageSeconds).append("s");

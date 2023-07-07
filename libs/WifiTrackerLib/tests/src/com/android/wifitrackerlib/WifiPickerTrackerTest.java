@@ -52,6 +52,7 @@ import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
 import android.net.TransportInfo;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
@@ -213,6 +214,10 @@ public class WifiPickerTrackerTest {
         when(mMockContext.getSystemService(SharedConnectivityManager.class))
                 .thenReturn(mMockSharedConnectivityManager);
         when(mMockContext.getString(anyInt())).thenReturn("");
+        when(mMockResources.getStringArray(R.array.wifitrackerlib_wifi_status)).thenReturn(
+                new String[]{"", "Scanning", "Connecting", "Authenticating", "Obtaining IP address",
+                        "Connected", "Suspended", "Disconnecting", "Unsuccessful", "Blocked",
+                        "Temporarily avoiding poor connection"});
 
         BaseWifiTracker.mEnableSharedConnectivityFeature = true;
     }
@@ -580,6 +585,45 @@ public class WifiPickerTrackerTest {
     }
 
     /**
+     * Tests that an L2 connected network (i.e. from NETWORK_STATE_CHANGED) will correctly be
+     * returned in getConnectedEntry() as the primary network.
+     */
+    @Test
+    public void testGetConnectedEntry_networkL2Connected_returnsConnectedEntry() {
+        final WifiPickerTracker wifiPickerTracker = createTestWifiPickerTracker();
+        final WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"ssid\"";
+        config.networkId = 1;
+        when(mMockWifiManager.getPrivilegedConfiguredNetworks())
+                .thenReturn(Collections.singletonList(config));
+        when(mMockWifiManager.getScanResults()).thenReturn(Arrays.asList(
+                buildScanResult("ssid", "bssid", START_MILLIS)));
+        wifiPickerTracker.onStart();
+        mTestLooper.dispatchAll();
+        verify(mMockContext).registerReceiver(
+                mBroadcastReceiverCaptor.capture(), any(), any(), any());
+        verify(mMockConnectivityManager).registerNetworkCallback(
+                any(), mNetworkCallbackCaptor.capture(), any());
+        final WifiEntry entry = wifiPickerTracker.getWifiEntries().get(0);
+
+        // Simulate an L2 connected network that's still authenticating.
+        when(mMockWifiInfo.getNetworkId()).thenReturn(1);
+        when(mMockWifiInfo.getRssi()).thenReturn(-50);
+        NetworkInfo mockNetworkInfo = mock(NetworkInfo.class);
+        when(mockNetworkInfo.getDetailedState())
+                .thenReturn(NetworkInfo.DetailedState.AUTHENTICATING);
+        Intent networkStateChanged = new Intent(WifiManager.NETWORK_STATE_CHANGED_ACTION);
+        networkStateChanged.putExtra(WifiManager.EXTRA_NETWORK_INFO, mockNetworkInfo);
+        mBroadcastReceiverCaptor.getValue().onReceive(mMockContext, networkStateChanged);
+
+        // Network should be returned in getConnectedWifiEntry() even though it's not L3 connected.
+        verify(mMockCallback, atLeastOnce()).onWifiEntriesChanged();
+//        assertThat(wifiPickerTracker.getWifiEntries()).isEmpty();
+        assertThat(wifiPickerTracker.getConnectedWifiEntry()).isEqualTo(entry);
+        assertThat(entry.isPrimaryNetwork()).isTrue();
+    }
+
+    /**
      * Tests that connecting to a network will update getConnectedEntry() to return the connected
      * WifiEntry if the framework times out and gives us an empty list of configs.
      */
@@ -788,7 +832,19 @@ public class WifiPickerTrackerTest {
         // Cell default + primary network validation should trigger low quality
         assertThat(wifiPickerTracker.getConnectedWifiEntry().getSummary()).isEqualTo(lowQuality);
 
-        // Lose the default network. Low quality should disappear, since cell isn't default anymore
+        // Cell + VPN is default should not trigger low quality, since the VPN underlying network is
+        // determined by the VPN app and not whether Wi-Fi is low quality or not.
+        mDefaultNetworkCallbackCaptor.getValue().onCapabilitiesChanged(Mockito.mock(Network.class),
+                new NetworkCapabilities.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
+                        .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR).build());
+        assertThat(wifiPickerTracker.getConnectedWifiEntry().getSummary()).isNotEqualTo(lowQuality);
+
+        // Set Cell to the default but then lose the default network. Low quality should disappear
+        // since cell default was lost.
+        mDefaultNetworkCallbackCaptor.getValue().onCapabilitiesChanged(Mockito.mock(Network.class),
+                new NetworkCapabilities.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR).build());
         mDefaultNetworkCallbackCaptor.getValue().onLost(mock(Network.class));
         assertThat(wifiPickerTracker.getConnectedWifiEntry().isDefaultNetwork()).isFalse();
     }
