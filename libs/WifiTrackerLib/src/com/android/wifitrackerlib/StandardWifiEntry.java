@@ -39,7 +39,6 @@ import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
 import static com.android.wifitrackerlib.Utils.getConnectedDescription;
 import static com.android.wifitrackerlib.Utils.getConnectingDescription;
 import static com.android.wifitrackerlib.Utils.getDisconnectedDescription;
-import static com.android.wifitrackerlib.Utils.getImsiProtectionDescription;
 import static com.android.wifitrackerlib.Utils.getMeteredDescription;
 import static com.android.wifitrackerlib.Utils.getSecurityTypesFromScanResult;
 import static com.android.wifitrackerlib.Utils.getSecurityTypesFromWifiConfiguration;
@@ -51,13 +50,15 @@ import android.app.admin.DevicePolicyManager;
 import android.app.admin.WifiSsidPolicy;
 import android.content.Context;
 import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.NetworkInfo;
+import android.net.wifi.MloLink;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
 import android.os.Handler;
 import android.os.SystemClock;
@@ -67,6 +68,7 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
+import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Log;
 
@@ -81,10 +83,8 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -104,13 +104,13 @@ public class StandardWifiEntry extends WifiEntry {
     @NonNull private final StandardWifiEntryKey mKey;
 
     @NonNull private final WifiTrackerInjector mInjector;
-    @NonNull private final Context mContext;
+    @NonNull protected final Context mContext;
 
     // Map of security type to matching scan results
-    @NonNull private final Map<Integer, List<ScanResult>> mMatchingScanResults = new HashMap<>();
+    @NonNull private final Map<Integer, List<ScanResult>> mMatchingScanResults = new ArrayMap<>();
     // Map of security type to matching WifiConfiguration
     // TODO: Change this to single WifiConfiguration once we can get multiple security type configs.
-    @NonNull private final Map<Integer, WifiConfiguration> mMatchingWifiConfigs = new HashMap<>();
+    @NonNull private final Map<Integer, WifiConfiguration> mMatchingWifiConfigs = new ArrayMap<>();
 
     // List of the target scan results to be displayed. This should match the highest available
     // security from all of the matched WifiConfigurations.
@@ -207,7 +207,7 @@ public class StandardWifiEntry extends WifiEntry {
                         mTargetWifiConfig,
                         mNetworkCapabilities,
                         mIsDefaultNetwork,
-                        mIsLowQuality,
+                        isLowQuality(),
                         mConnectivityReport);
                 break;
             default:
@@ -236,12 +236,6 @@ public class StandardWifiEntry extends WifiEntry {
         }
 
         return sj.toString();
-    }
-
-    @Override
-    public CharSequence getSecondSummary() {
-        return getConnectedState() == CONNECTED_STATE_CONNECTED
-                ? getImsiProtectionDescription(mContext, getWifiConfiguration()) : "";
     }
 
     @Override
@@ -421,7 +415,8 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public synchronized boolean canSignIn() {
-        return mNetworkCapabilities != null
+        return mNetwork != null
+                && mNetworkCapabilities != null
                 && mNetworkCapabilities.hasCapability(
                         NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL);
     }
@@ -429,11 +424,8 @@ public class StandardWifiEntry extends WifiEntry {
     @Override
     public void signIn(@Nullable SignInCallback callback) {
         if (canSignIn()) {
-            // canSignIn() implies that this WifiEntry is the currently connected network, so use
-            // getCurrentNetwork() to start the captive portal app.
             NonSdkApiWrapper.startCaptivePortalApp(
-                    mContext.getSystemService(ConnectivityManager.class),
-                    mWifiManager.getCurrentNetwork());
+                    mContext.getSystemService(ConnectivityManager.class), mNetwork);
         }
     }
 
@@ -699,7 +691,8 @@ public class StandardWifiEntry extends WifiEntry {
 
         // The network is disabled because of one of the authentication problems.
         NetworkSelectionStatus networkSelectionStatus = wifiConfig.getNetworkSelectionStatus();
-        if (networkSelectionStatus.getNetworkSelectionStatus() != NETWORK_SELECTION_ENABLED) {
+        if (networkSelectionStatus.getNetworkSelectionStatus() != NETWORK_SELECTION_ENABLED
+                || !networkSelectionStatus.hasEverConnected()) {
             if (networkSelectionStatus.getDisableReasonCounter(DISABLED_AUTHENTICATION_FAILURE) > 0
                     || networkSelectionStatus.getDisableReasonCounter(
                     DISABLED_BY_WRONG_PASSWORD) > 0
@@ -758,8 +751,9 @@ public class StandardWifiEntry extends WifiEntry {
 
     @WorkerThread
     @Override
-    synchronized void updateNetworkCapabilities(@Nullable NetworkCapabilities capabilities) {
-        super.updateNetworkCapabilities(capabilities);
+    synchronized void onNetworkCapabilitiesChanged(
+            @NonNull Network network, @NonNull NetworkCapabilities capabilities) {
+        super.onNetworkCapabilitiesChanged(network, capabilities);
 
         // Auto-open an available captive portal if the user manually connected to this network.
         if (canSignIn() && mShouldAutoOpenCaptivePortal) {
@@ -899,8 +893,7 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @WorkerThread
-    protected synchronized boolean connectionInfoMatches(@NonNull WifiInfo wifiInfo,
-            @NonNull NetworkInfo networkInfo) {
+    protected synchronized boolean connectionInfoMatches(@NonNull WifiInfo wifiInfo) {
         if (wifiInfo.isPasspointAp() || wifiInfo.isOsuAp()) {
             return false;
         }
@@ -969,7 +962,7 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     // TODO(b/227622961): Remove the suppression once the linter recognizes BuildCompat.isAtLeastT()
-    @SuppressLint("NewApi")
+    @SuppressLint({"NewApi", "SwitchIntDef"})
     private synchronized String getScanResultDescription(ScanResult scanResult, long nowMs) {
         final StringBuilder description = new StringBuilder();
         description.append(" \n{");
@@ -984,8 +977,35 @@ public class StandardWifiEntry extends WifiEntry {
         if (BuildCompat.isAtLeastT() && wifiStandard == ScanResult.WIFI_STANDARD_11BE) {
             description.append(",mldMac=").append(scanResult.getApMldMacAddress());
             description.append(",linkId=").append(scanResult.getApMloLinkId());
-            description.append(",affLinks=").append(
-                    Arrays.toString(scanResult.getAffiliatedMloLinks().toArray()));
+            description.append(",affLinks=");
+            StringJoiner affLinks = new StringJoiner(",", "[", "]");
+            for (MloLink link : scanResult.getAffiliatedMloLinks()) {
+                final int scanResultBand;
+                switch (link.getBand()) {
+                    case WifiScanner.WIFI_BAND_24_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_24_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_5_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_5_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_6_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_6_GHZ;
+                        break;
+                    case WifiScanner.WIFI_BAND_60_GHZ:
+                        scanResultBand = ScanResult.WIFI_BAND_60_GHZ;
+                        break;
+                    default:
+                        Log.e(TAG, "Unknown MLO link band: " + link.getBand());
+                        scanResultBand = ScanResult.UNSPECIFIED;
+                        break;
+                }
+                affLinks.add(new StringJoiner(",", "{", "}")
+                        .add("apMacAddr=" + link.getApMacAddress())
+                        .add("freq=" + ScanResult.convertChannelToFrequencyMhzIfSupported(
+                                link.getChannel(), scanResultBand))
+                        .toString());
+            }
+            description.append(affLinks.toString());
         }
         final int ageSeconds = (int) (nowMs - scanResult.timestamp / 1000) / 1000;
         description.append(",").append(ageSeconds).append("s");
