@@ -111,10 +111,14 @@ public class HotspotNetworkDetailsTracker extends NetworkDetailsTracker {
     @WorkerThread
     @Override
     protected void handleServiceConnected() {
-        if (mEnableSharedConnectivityFeature && mSharedConnectivityManager != null) {
-            mHotspotNetworkData = mSharedConnectivityManager.getHotspotNetworks().stream().filter(
-                    network -> network.getDeviceId() == mChosenEntry.getHotspotNetworkEntryKey()
-                            .getDeviceId()).findFirst().orElse(null);
+        if (mInjector.isSharedConnectivityFeatureEnabled() && mSharedConnectivityManager != null) {
+            List<HotspotNetwork> hotspotNetworks = mSharedConnectivityManager.getHotspotNetworks();
+            if (hotspotNetworks != null) {
+                mHotspotNetworkData = hotspotNetworks.stream().filter(
+                                network -> network.getDeviceId()
+                                        == mChosenEntry.getHotspotNetworkEntryKey().getDeviceId())
+                        .findFirst().orElse(null);
+            }
         }
         if (mHotspotNetworkData == null) {
             throw new IllegalArgumentException(
@@ -126,7 +130,7 @@ public class HotspotNetworkDetailsTracker extends NetworkDetailsTracker {
     @WorkerThread
     @Override
     protected void handleHotspotNetworksUpdated(List<HotspotNetwork> networks) {
-        if (mEnableSharedConnectivityFeature) {
+        if (mInjector.isSharedConnectivityFeatureEnabled()) {
             mHotspotNetworkData = networks.stream().filter(network -> network.getDeviceId()
                     == mChosenEntry.getHotspotNetworkEntryKey().getDeviceId()).findFirst().orElse(
                     null);

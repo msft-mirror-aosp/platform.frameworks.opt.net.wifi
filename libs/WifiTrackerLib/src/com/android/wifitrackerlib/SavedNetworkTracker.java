@@ -229,16 +229,14 @@ public class SavedNetworkTracker extends BaseWifiTracker {
         return allEntries;
     }
 
-    private void clearAllWifiEntries() {
-        mStandardWifiEntryCache.clear();
-        mPasspointWifiEntryCache.clear();
-    }
-
     @WorkerThread
     @Override
     protected void handleOnStart() {
-        // Remove stale WifiEntries remaining from the last onStop().
-        clearAllWifiEntries();
+        // Clear any stale connection info in case we missed any NetworkCallback.onLost() while in
+        // the stopped state.
+        for (WifiEntry wifiEntry : getAllWifiEntries()) {
+            wifiEntry.clearConnectionInfo();
+        }
 
         // Update configs and scans
         updateStandardWifiEntryConfigs(mWifiManager.getConfiguredNetworks());
@@ -468,7 +466,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
 
         // Create new entry for each unmatched config
         for (StandardWifiEntryKey key : wifiConfigsByKey.keySet()) {
-            mStandardWifiEntryCache.add(new StandardWifiEntry(mInjector, mContext, mMainHandler,
+            mStandardWifiEntryCache.add(new StandardWifiEntry(mInjector, mMainHandler,
                     key, wifiConfigsByKey.get(key), null, mWifiManager,
                     true /* forSavedNetworksPage */));
         }
@@ -500,7 +498,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
         // Create new entry for each unmatched config
         for (String key : passpointConfigsByKey.keySet()) {
             mPasspointWifiEntryCache.put(key,
-                    new PasspointWifiEntry(mInjector, mContext, mMainHandler,
+                    new PasspointWifiEntry(mInjector, mMainHandler,
                             passpointConfigsByKey.get(key), mWifiManager,
                             true /* forSavedNetworksPage */));
         }
