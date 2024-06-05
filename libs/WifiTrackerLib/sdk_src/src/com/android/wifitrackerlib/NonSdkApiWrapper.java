@@ -59,7 +59,7 @@ class NonSdkApiWrapper {
     /**
      * Tries to get WifiInfo from network capabilities if it is VCN-over-Wifi.
      */
-    static WifiInfo getVcnWifiInfo(@NonNull NetworkCapabilities networkCapabilities) {
+    static WifiInfo getWifiInfoIfVcn(@NonNull NetworkCapabilities networkCapabilities) {
         // This is only useful for treating CELLULAR over WIFI as a carrier merged network in
         // provider model Settings. Since SUW doesn't use the provider model, this is not used.
         return null;
@@ -100,5 +100,21 @@ class NonSdkApiWrapper {
     static WifiSsidPolicy getWifiSsidPolicy(@NonNull DevicePolicyManager devicePolicyManager) {
         // Return null since SUW does not have QUERY_ADMIN_POLICY permission.
         return null;
+    }
+
+    /**
+     * Whether the hotspot network provider battery charging status flag is enabled.
+     */
+    static boolean isNetworkProviderBatteryChargingStatusEnabled() {
+        // Google3 can't access trunk stable flags, so default to false.
+        return false;
+    }
+
+    /**
+     * Whether Android Wifi V Apis flag is enabled.
+     */
+    static boolean isAndroidVWifiApiEnabled() {
+        // Google3 can't access trunk stable flags, so default to false.
+        return false;
     }
 }

@@ -16,6 +16,9 @@
 
 package com.android.wifitrackerlib;
 
+import static com.android.wifi.flags.Flags.androidVWifiApi;
+import static com.android.wifi.flags.Flags.networkProviderBatteryChargingStatus;
+
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.WifiSsidPolicy;
 import android.content.Context;
@@ -94,7 +97,7 @@ class NonSdkApiWrapper {
     /**
      * Tries to get WifiInfo from network capabilities if it is VCN-over-Wifi.
      */
-    static WifiInfo getVcnWifiInfo(@NonNull NetworkCapabilities networkCapabilities) {
+    static WifiInfo getWifiInfoIfVcn(@NonNull NetworkCapabilities networkCapabilities) {
         TransportInfo transportInfo = networkCapabilities.getTransportInfo();
         if (transportInfo instanceof VcnTransportInfo) {
             return ((VcnTransportInfo) transportInfo).getWifiInfo();
@@ -133,5 +136,20 @@ class NonSdkApiWrapper {
             return devicePolicyManager.getWifiSsidPolicy();
         }
         return null;
+    }
+
+    /**
+     * Whether the hotspot network provider battery charging status flag is enabled.
+     */
+    static boolean isNetworkProviderBatteryChargingStatusEnabled() {
+        return networkProviderBatteryChargingStatus();
+    }
+
+    /**
+     * Whether Android Wifi V Apis flag is enabled.
+     */
+    static boolean isAndroidVWifiApiEnabled() {
+        // Google3 can't access trunk stable flags, so default to false.
+        return androidVWifiApi();
     }
 }

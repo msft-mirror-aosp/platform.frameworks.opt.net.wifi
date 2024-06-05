@@ -94,7 +94,7 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
                                 uniqueIdToPasspointWifiEntryKey(passpointConfig.getUniqueId())))
                         .findAny();
         if (optionalPasspointConfig.isPresent()) {
-            mChosenEntry = new PasspointWifiEntry(mInjector, mContext, mMainHandler,
+            mChosenEntry = new PasspointWifiEntry(mInjector, mMainHandler,
                     optionalPasspointConfig.get(), mWifiManager,
                     false /* forSavedNetworksPage */);
         } else {
@@ -156,6 +156,10 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
 
     @WorkerThread
     private void updateStartInfo() {
+        // Clear any stale connection info in case we missed any NetworkCallback.onLost() while in
+        // the stopped state.
+        mChosenEntry.clearConnectionInfo();
+
         conditionallyUpdateScanResults(true /* lastScanSucceeded */);
         conditionallyUpdateConfig();
         Network currentNetwork = mWifiManager.getCurrentNetwork();
@@ -222,7 +226,7 @@ public class PasspointNetworkDetailsTracker extends NetworkDetailsTracker {
                         osuProviderToPasspointConfig.get(provider);
                 if (provisionedConfig != null && TextUtils.equals(mChosenEntry.getKey(),
                         uniqueIdToPasspointWifiEntryKey(provisionedConfig.getUniqueId()))) {
-                    mOsuWifiEntry = new OsuWifiEntry(mInjector, mContext, mMainHandler, provider,
+                    mOsuWifiEntry = new OsuWifiEntry(mInjector, mMainHandler, provider,
                             mWifiManager, false /* forSavedNetworksPage */);
                     mOsuWifiEntry.updateScanResultInfo(osuProviderToScans.get(provider));
                     mOsuWifiEntry.setAlreadyProvisioned(true);

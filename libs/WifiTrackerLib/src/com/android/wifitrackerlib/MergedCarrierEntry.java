@@ -19,9 +19,9 @@ package com.android.wifitrackerlib;
 import static android.net.wifi.WifiInfo.DEFAULT_MAC_ADDRESS;
 import static android.net.wifi.WifiInfo.sanitizeSsid;
 
-import static com.android.wifitrackerlib.Utils.getVerboseLoggingDescription;
+import static com.android.wifitrackerlib.Utils.getVerboseSummary;
 
-import android.content.Context;
+import android.annotation.SuppressLint;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
@@ -42,16 +42,14 @@ public class MergedCarrierEntry extends WifiEntry {
 
     private final int mSubscriptionId;
     @NonNull private final String mKey;
-    @NonNull private final Context mContext;
     boolean mIsCellDefaultRoute;
 
-    MergedCarrierEntry(@NonNull Handler callbackHandler,
+    MergedCarrierEntry(@NonNull WifiTrackerInjector injector,
+            @NonNull Handler callbackHandler,
             @NonNull WifiManager wifiManager,
             boolean forSavedNetworksPage,
-            @NonNull Context context,
             int subscriptionId) throws IllegalArgumentException {
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
-        mContext = context;
+        super(injector, callbackHandler, wifiManager, forSavedNetworksPage);
         mSubscriptionId = subscriptionId;
         mKey = KEY_PREFIX + subscriptionId;
     }
@@ -65,10 +63,10 @@ public class MergedCarrierEntry extends WifiEntry {
     public String getSummary(boolean concise) {
         StringJoiner sj = new StringJoiner(mContext.getString(
                 R.string.wifitrackerlib_summary_separator));
-        if (!concise) {
-            final String verboseLoggingDescription = getVerboseLoggingDescription(this);
-            if (!TextUtils.isEmpty(verboseLoggingDescription)) {
-                sj.add(verboseLoggingDescription);
+        if (!concise && isVerboseSummaryEnabled()) {
+            final String verboseSummary = getVerboseSummary(this);
+            if (!TextUtils.isEmpty(verboseSummary)) {
+                sj.add(verboseSummary);
             }
         }
         return sj.toString();
@@ -83,6 +81,7 @@ public class MergedCarrierEntry extends WifiEntry {
     }
 
     @Override
+    @SuppressLint("HardwareIds")
     public synchronized String getMacAddress() {
         if (mWifiInfo != null) {
             final String wifiInfoMac = mWifiInfo.getMacAddress();
@@ -170,12 +169,22 @@ public class MergedCarrierEntry extends WifiEntry {
         }
     }
 
-    /* package */ int getSubscriptionId() {
+    /**
+     * Returns the current subscription ID this merged carrier network is for.
+     */
+    public int getSubscriptionId() {
         return mSubscriptionId;
     }
 
     /* package */ synchronized void updateIsCellDefaultRoute(boolean isCellDefaultRoute) {
         mIsCellDefaultRoute = isCellDefaultRoute;
         notifyOnUpdated();
+    }
+
+    @Override
+    public String toString() {
+        StringJoiner sj = new StringJoiner("][", "[", "]");
+        sj.add("SubId:" + mSubscriptionId);
+        return super.toString() + sj;
     }
 }

@@ -30,8 +30,9 @@ import static com.android.wifitrackerlib.Utils.getConnectedDescription;
 import static com.android.wifitrackerlib.Utils.getConnectingDescription;
 import static com.android.wifitrackerlib.Utils.getDisconnectedDescription;
 import static com.android.wifitrackerlib.Utils.getMeteredDescription;
-import static com.android.wifitrackerlib.Utils.getVerboseLoggingDescription;
+import static com.android.wifitrackerlib.Utils.getVerboseSummary;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -49,6 +50,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
+import androidx.core.os.BuildCompat;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,10 +70,9 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     private final List<ScanResult> mCurrentRoamingScanResults = new ArrayList<>();
 
     @NonNull private final String mKey;
+    @NonNull private final String mUniqueId;
     @NonNull private final String mFqdn;
     @NonNull private final String mFriendlyName;
-    @NonNull private final WifiTrackerInjector mInjector;
-    @NonNull private final Context mContext;
     @Nullable
     private PasspointConfiguration mPasspointConfig;
     @Nullable private WifiConfiguration mWifiConfig;
@@ -95,17 +96,16 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
      */
     PasspointWifiEntry(
             @NonNull WifiTrackerInjector injector,
-            @NonNull Context context, @NonNull Handler callbackHandler,
+            @NonNull Handler callbackHandler,
             @NonNull PasspointConfiguration passpointConfig,
             @NonNull WifiManager wifiManager,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
+        super(injector, callbackHandler, wifiManager, forSavedNetworksPage);
 
         checkNotNull(passpointConfig, "Cannot construct with null PasspointConfiguration!");
-        mInjector = injector;
-        mContext = context;
         mPasspointConfig = passpointConfig;
-        mKey = uniqueIdToPasspointWifiEntryKey(passpointConfig.getUniqueId());
+        mUniqueId = passpointConfig.getUniqueId();
+        mKey = uniqueIdToPasspointWifiEntryKey(mUniqueId);
         mFqdn = passpointConfig.getHomeSp().getFqdn();
         checkNotNull(mFqdn, "Cannot construct with null PasspointConfiguration FQDN!");
         mFriendlyName = passpointConfig.getHomeSp().getFriendlyName();
@@ -125,16 +125,15 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
             @NonNull WifiConfiguration wifiConfig,
             @NonNull WifiManager wifiManager,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
+        super(injector, callbackHandler, wifiManager, forSavedNetworksPage);
 
         checkNotNull(wifiConfig, "Cannot construct with null WifiConfiguration!");
         if (!wifiConfig.isPasspoint()) {
             throw new IllegalArgumentException("Given WifiConfiguration is not for Passpoint!");
         }
-        mInjector = injector;
-        mContext = context;
         mWifiConfig = wifiConfig;
-        mKey = uniqueIdToPasspointWifiEntryKey(wifiConfig.getKey());
+        mUniqueId = wifiConfig.getKey();
+        mKey = uniqueIdToPasspointWifiEntryKey(mUniqueId);
         mFqdn = wifiConfig.FQDN;
         checkNotNull(mFqdn, "Cannot construct with null WifiConfiguration FQDN!");
         mFriendlyName = mWifiConfig.providerFriendlyName;
@@ -187,10 +186,16 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
                     connectedStateDescription = getConnectingDescription(mContext, mNetworkInfo);
                     break;
                 case CONNECTED_STATE_CONNECTED:
+                    if (mNetworkCapabilities == null) {
+                        Log.e(TAG, "Tried to get CONNECTED description, but mNetworkCapabilities"
+                                + " was unexpectedly null!");
+                        connectedStateDescription = null;
+                        break;
+                    }
                     connectedStateDescription = getConnectedDescription(mContext,
                             mWifiConfig,
                             mNetworkCapabilities,
-                            mIsDefaultNetwork,
+                            isDefaultNetwork(),
                             isLowQuality(),
                             mConnectivityReport);
                     break;
@@ -213,14 +218,19 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
             sj.add(meteredDescription);
         }
 
-        if (!concise) {
-            String verboseLoggingDescription = getVerboseLoggingDescription(this);
-            if (!TextUtils.isEmpty(verboseLoggingDescription)) {
-                sj.add(verboseLoggingDescription);
+        if (!concise && isVerboseSummaryEnabled()) {
+            String verboseSummary = getVerboseSummary(this);
+            if (!TextUtils.isEmpty(verboseSummary)) {
+                sj.add(verboseSummary);
             }
         }
 
         return sj.toString();
+    }
+
+    @Override
+    public boolean shouldShowSsid() {
+        return true;
     }
 
     @Override
@@ -249,6 +259,7 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     }
 
     @Override
+    @SuppressLint("HardwareIds")
     public synchronized String getMacAddress() {
         if (mWifiInfo != null) {
             final String wifiInfoMac = mWifiInfo.getMacAddress();
@@ -468,13 +479,14 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     @Override
     public synchronized String getBandString() {
         if (mWifiInfo != null) {
-            return Utils.getBandString(mContext, mWifiInfo);
+            return Utils.wifiInfoToBandString(mContext, mWifiInfo);
         }
         if (!mCurrentHomeScanResults.isEmpty()) {
-            return Utils.getBandString(mContext, mCurrentHomeScanResults.get(0).frequency);
+            return Utils.frequencyToBandString(mContext, mCurrentHomeScanResults.get(0).frequency);
         }
         if (!mCurrentRoamingScanResults.isEmpty()) {
-            return Utils.getBandString(mContext, mCurrentRoamingScanResults.get(0).frequency);
+            return Utils.frequencyToBandString(
+                    mContext, mCurrentRoamingScanResults.get(0).frequency);
         }
         return "";
     }
@@ -554,7 +566,11 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
             return false;
         }
 
-        // Match with FQDN until WifiInfo supports returning the passpoint uniqueID
+        if (BuildCompat.isAtLeastV() && NonSdkApiWrapper.isAndroidVWifiApiEnabled()) {
+            return TextUtils.equals(mUniqueId, wifiInfo.getPasspointUniqueId());
+        }
+
+        // Match with FQDN if WifiInfo doesn't support returning the uniqueID.
         return TextUtils.equals(wifiInfo.getPasspointFqdn(), mFqdn);
     }
 
@@ -621,5 +637,18 @@ public class PasspointWifiEntry extends WifiEntry implements WifiEntry.WifiEntry
     /** Get the PasspointConfiguration instance of the entry. */
     public PasspointConfiguration getPasspointConfig() {
         return mPasspointConfig;
+    }
+
+    @Override
+    public String toString() {
+        StringJoiner sj = new StringJoiner("][", "[", "]");
+        sj.add("FQDN:" + mFqdn);
+        sj.add("FriendlyName:" + mFriendlyName);
+        if (mPasspointConfig != null) {
+            sj.add("UniqueId:" + mPasspointConfig.getUniqueId());
+        } else if (mWifiConfig != null) {
+            sj.add("UniqueId:" + mWifiConfig.getKey());
+        }
+        return super.toString() + sj;
     }
 }
