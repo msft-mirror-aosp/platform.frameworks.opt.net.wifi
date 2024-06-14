@@ -1209,7 +1209,7 @@ public class Utils {
         if (transportInfo instanceof WifiInfo) {
             return (WifiInfo) transportInfo;
         }
-        return null;
+        return NonSdkApiWrapper.getWifiInfoIfVcn(capabilities);
     }
 
     /**
