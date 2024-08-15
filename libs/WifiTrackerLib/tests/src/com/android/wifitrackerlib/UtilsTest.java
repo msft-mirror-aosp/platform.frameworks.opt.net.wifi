@@ -44,6 +44,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
@@ -99,6 +100,7 @@ public class UtilsTest {
     private static final String STRING_AVAILABLE_VIA_APP = "available_via_";
     private static final String STRING_CONNECTED_VIA_APP = "connected_via_";
     private static final String STRING_CONNECTED_LOW_QUALITY = "low_quality";
+    private static final String STRING_CONNECTED_LESS_SECURE = "less secure";
     private static final String STRING_NETWORK_AVAILABLE_SIGN_IN = "network_available_sign_in";
     private static final String STRING_LIMITED_CONNECTION = "limited_connection";
     private static final String STRING_CHECKING_FOR_INTERNET_ACCESS =
@@ -135,6 +137,11 @@ public class UtilsTest {
     private static final String BAND_6_GHZ = "6 GHz";
     private static final String STRING_LINK_SPEED_MBPS = " Mbps";
     private static final String STRING_LINK_SPEED_ON_BAND = " on ";
+
+    private static final String STRING_WEP_SECURITY = "WEP";
+    private static final String STRING_WEP_LESS_SECURE_APPEND =
+                    STRING_SUMMARY_SEPARATOR
+                    + STRING_WEP_SECURITY + " (" + STRING_CONNECTED_LESS_SECURE + ")";
 
     @Mock private WifiTrackerInjector mMockInjector;
     @Mock private Context mMockContext;
@@ -219,6 +226,11 @@ public class UtilsTest {
         when(mMockContext.getString(eq(R.string.wifitrackerlib_link_speed_on_band),
                 any())).thenAnswer((answer) -> answer.getArguments()[1] + STRING_LINK_SPEED_ON_BAND
                 + answer.getArguments()[2]);
+
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_security_wep))
+                .thenReturn(STRING_WEP_SECURITY);
+        when(mMockContext.getString(R.string.wifi_connected_less_secure, STRING_WEP_SECURITY))
+                .thenReturn(STRING_WEP_SECURITY + " (" + STRING_CONNECTED_LESS_SECURE + ")");
     }
 
     @Test
@@ -662,6 +674,53 @@ public class UtilsTest {
     }
 
     @Test
+    public void testDisconnectedDescription_noInternet_returnsNoInternetString() {
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_disconnected))
+                .thenReturn("wifitrackerlib_wifi_disconnected");
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_no_internet))
+                .thenReturn("wifitrackerlib_wifi_no_internet");
+        when(mMockContext.getString(R.string.wifitrackerlib_wifi_no_internet_no_reconnect))
+                .thenReturn("wifitrackerlib_wifi_no_internet_no_reconnect");
+        String noAttributionPackage = "noAttributionPackage";
+        when(mMockInjector.getNoAttributionAnnotationPackages())
+                .thenReturn(Set.of(noAttributionPackage));
+
+        WifiConfiguration temporaryNoInternet = spy(new WifiConfiguration());
+        temporaryNoInternet.creatorName = noAttributionPackage;
+        NetworkSelectionStatus networkSelectionStatus =
+                spy(new NetworkSelectionStatus.Builder()
+                        .setNetworkSelectionStatus(
+                                NetworkSelectionStatus.NETWORK_SELECTION_TEMPORARY_DISABLED)
+                        .setNetworkSelectionDisableReason(
+                                NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY)
+                        .build());
+        temporaryNoInternet.setNetworkSelectionStatus(networkSelectionStatus);
+        assertThat(Utils.getDisconnectedDescription(
+                mMockInjector, mMockContext, temporaryNoInternet, true, true))
+                .isEqualTo(new StringJoiner(STRING_SUMMARY_SEPARATOR)
+                        .add("wifitrackerlib_wifi_disconnected")
+                        .add("wifitrackerlib_wifi_no_internet")
+                        .toString());
+
+        WifiConfiguration permanentNoInternet = spy(new WifiConfiguration());
+        permanentNoInternet.creatorName = noAttributionPackage;
+        networkSelectionStatus =
+                spy(new NetworkSelectionStatus.Builder()
+                        .setNetworkSelectionStatus(
+                                NetworkSelectionStatus.NETWORK_SELECTION_PERMANENTLY_DISABLED)
+                        .setNetworkSelectionDisableReason(
+                                NetworkSelectionStatus.DISABLED_NO_INTERNET_PERMANENT)
+                        .build());
+        permanentNoInternet.setNetworkSelectionStatus(networkSelectionStatus);
+        assertThat(Utils.getDisconnectedDescription(
+                mMockInjector, mMockContext, permanentNoInternet, true, true))
+                .isEqualTo(new StringJoiner(STRING_SUMMARY_SEPARATOR)
+                        .add("wifitrackerlib_wifi_disconnected")
+                        .add("wifitrackerlib_wifi_no_internet_no_reconnect")
+                        .toString());
+    }
+
+    @Test
     public void testWifiInfoBandString_multipleMloLinks_returnsMultipleBands() {
         assumeTrue(BuildCompat.isAtLeastU());
 
@@ -740,6 +799,7 @@ public class UtilsTest {
     public void testGetConnectedDescription() {
         WifiConfiguration wifiConfig = mock(WifiConfiguration.class);
         NetworkCapabilities networkCapabilities = mock(NetworkCapabilities.class);
+        WifiInfo wifiInfo = mock(WifiInfo.class);
         ConnectivityDiagnosticsManager.ConnectivityReport connectivityReport = mock(
                 ConnectivityDiagnosticsManager.ConnectivityReport.class);
 
@@ -748,6 +808,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 null)).isEqualTo(STRING_CHECKING_FOR_INTERNET_ACCESS);
@@ -756,6 +817,7 @@ public class UtilsTest {
                 mMockContext,
                 null,
                 networkCapabilities,
+                wifiInfo,
                 false,
                 false,
                 null)).isEqualTo(STRING_CHECKING_FOR_INTERNET_ACCESS);
@@ -767,6 +829,7 @@ public class UtilsTest {
                 mMockContext,
                 null,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 null)).isEqualTo(STRING_WIFI_STATUS_CONNECTED);
@@ -776,6 +839,7 @@ public class UtilsTest {
                 mMockContext,
                 null,
                 networkCapabilities,
+                wifiInfo,
                 false,
                 true,
                 null)).isEqualTo(STRING_CONNECTED_LOW_QUALITY);
@@ -787,6 +851,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_WIFI_STATUS_CONNECTED
@@ -798,6 +863,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_CONNECTED_CANNOT_PROVIDE_INTERNET);
@@ -808,6 +874,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_PRIVATE_DNS_BROKEN);
@@ -819,6 +886,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 null)).isEqualTo(STRING_LIMITED_CONNECTION);
@@ -830,6 +898,7 @@ public class UtilsTest {
                 mMockContext,
                 wifiConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 null)).isEqualTo(STRING_NETWORK_AVAILABLE_SIGN_IN);
@@ -848,6 +917,7 @@ public class UtilsTest {
                 mMockContext,
                 suggestionConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_CONNECTED_VIA_APP + "appLabel"
@@ -860,6 +930,7 @@ public class UtilsTest {
                 mMockContext,
                 suggestionConfig,
                 networkCapabilities,
+                wifiInfo,
                 false,
                 true,
                 connectivityReport)).isEqualTo(STRING_AVAILABLE_VIA_APP + "appLabel"
@@ -874,6 +945,7 @@ public class UtilsTest {
                 mMockContext,
                 suggestionConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_AVAILABLE_VIA_APP + "appLabel"
@@ -888,10 +960,36 @@ public class UtilsTest {
                 mMockContext,
                 suggestionConfig,
                 networkCapabilities,
+                wifiInfo,
                 true,
                 false,
                 connectivityReport)).isEqualTo(STRING_CONNECTED_VIA_APP + "appLabel"
                 + STRING_SUMMARY_SEPARATOR + STRING_LIMITED_CONNECTION);
+
+        // Connected / WEP (less secure)
+        reset(networkCapabilities);
+        when(networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                .thenReturn(true);
+        when(wifiInfo.getCurrentSecurityType()).thenReturn(WifiInfo.SECURITY_TYPE_WEP);
+        assertThat(Utils.getConnectedDescription(
+                mMockContext,
+                null,
+                networkCapabilities,
+                wifiInfo,
+                true,
+                false,
+                null)).isEqualTo(STRING_WIFI_STATUS_CONNECTED + STRING_WEP_LESS_SECURE_APPEND);
+
+        // Connected via app / WEP (less secure)
+        assertThat(Utils.getConnectedDescription(
+                mMockContext,
+                suggestionConfig,
+                networkCapabilities,
+                wifiInfo,
+                true,
+                false,
+                connectivityReport)).isEqualTo(STRING_CONNECTED_VIA_APP + "appLabel"
+                + STRING_WEP_LESS_SECURE_APPEND);
     }
 
     @Test
