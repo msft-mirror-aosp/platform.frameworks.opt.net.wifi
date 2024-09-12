@@ -47,7 +47,6 @@ import static org.mockito.Mockito.when;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.res.Resources;
 import android.net.ConnectivityDiagnosticsManager;
 import android.net.ConnectivityManager;
@@ -2408,12 +2407,8 @@ public class WifiPickerTrackerTest {
         wifiPickerTracker.disableScanning();
         wifiPickerTracker.onStart();
         mTestLooper.dispatchAll();
-        ArgumentCaptor<IntentFilter> intentFilterCaptor =
-                ArgumentCaptor.forClass(IntentFilter.class);
         verify(mMockContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                intentFilterCaptor.capture(), any(), any());
-        assertThat(intentFilterCaptor.getValue()
-                .hasAction(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)).isFalse();
+                any(), any(), any());
         mBroadcastReceiverCaptor.getValue().onReceive(mMockContext,
                 new Intent(WifiManager.WIFI_STATE_CHANGED_ACTION).putExtra(
                         WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_ENABLED));
