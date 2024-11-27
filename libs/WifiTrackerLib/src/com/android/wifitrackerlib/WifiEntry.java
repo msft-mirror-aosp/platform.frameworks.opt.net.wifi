@@ -246,7 +246,6 @@ public class WifiEntry {
     protected final Handler mCallbackHandler;
     protected int mWifiInfoLevel = WIFI_LEVEL_UNREACHABLE;
     protected int mScanResultLevel = WIFI_LEVEL_UNREACHABLE;
-    protected WifiInfo mPrimaryWifiInfo;
     protected WifiInfo mWifiInfo;
     protected NetworkInfo mNetworkInfo;
     protected Network mNetwork;
@@ -1004,7 +1003,6 @@ public class WifiEntry {
      */
     synchronized void onPrimaryWifiInfoChanged(
             @Nullable WifiInfo primaryWifiInfo, @Nullable NetworkInfo networkInfo) {
-        mPrimaryWifiInfo = primaryWifiInfo;
         if (primaryWifiInfo == null || !connectionInfoMatches(primaryWifiInfo)) {
             if (mNetworkInfo != null) {
                 mNetworkInfo = null;
@@ -1041,11 +1039,8 @@ public class WifiEntry {
         }
 
         // Treat non-primary, non-OEM connections as disconnected.
-        // If mPrimaryWifiInfo exists (i.e. WifiManager.getConnectionInfo()) but this WifiInfo is
-        // also primary, treat it as lost since it may be a stale value.
-        boolean isPrimary = NonSdkApiWrapper.isPrimary(wifiInfo)
-                && (mPrimaryWifiInfo == null || wifiInfo.equals(mPrimaryWifiInfo));
-        if (!isPrimary && !NonSdkApiWrapper.isOemCapabilities(capabilities)) {
+        if (!NonSdkApiWrapper.isPrimary(wifiInfo)
+                && !NonSdkApiWrapper.isOemCapabilities(capabilities)) {
             onNetworkLost(network);
             return;
         }
