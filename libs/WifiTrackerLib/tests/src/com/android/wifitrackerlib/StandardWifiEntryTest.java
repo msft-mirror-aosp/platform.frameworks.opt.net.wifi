@@ -60,6 +60,7 @@ import android.net.LinkProperties;
 import android.net.MacAddress;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
@@ -481,6 +482,46 @@ public class StandardWifiEntryTest {
                     .when(() -> NonSdkApiWrapper.isOemCapabilities(mMockNetworkCapabilities));
             entry.onNetworkCapabilitiesChanged(mMockNetwork, mMockNetworkCapabilities);
             assertThat(entry.getConnectedState()).isEqualTo(CONNECTED_STATE_DISCONNECTED);
+        } finally {
+            session.finishMocking();
+        }
+    }
+
+    /**
+     * Tests that onNetworkCapabilitiesChanged is ignored if it is primary but another network is
+     * already marked as primary via NETWORK_STATE_CHANGED/getConnectionInfo(). This may happen
+     * as a race condition if we get the broadcast before NetworkCallback changes.
+     */
+    @Test
+    public void testOnNetworkCapabilitiesChanged_otherNetworkIsPrimary_doesNotBecomeConnected() {
+        final WifiConfiguration config = new WifiConfiguration();
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
+        config.SSID = "\"ssid\"";
+        config.networkId = 1;
+        final StandardWifiEntry entry = new StandardWifiEntry(
+                mMockInjector, mTestHandler,
+                ssidAndSecurityTypeToStandardWifiEntryKey("ssid", SECURITY_TYPE_EAP),
+                Collections.singletonList(config), null, mMockWifiManager,
+                false /* forSavedNetworksPage */);
+        when(mMockWifiInfo.getNetworkId()).thenReturn(1);
+        when(mMockWifiInfo.getRssi()).thenReturn(TestUtils.GOOD_RSSI);
+
+        MockitoSession session = mockitoSession().spyStatic(NonSdkApiWrapper.class).startMocking();
+        try {
+            // Mock a different primary WifiInfo for onPrimaryWifiInfoChanged
+            WifiInfo primaryWifiInfo = mock(WifiInfo.class);
+            when(primaryWifiInfo.getNetworkId()).thenReturn(2);
+            NetworkInfo mockNetworkInfo = mock(NetworkInfo.class);
+            entry.onPrimaryWifiInfoChanged(primaryWifiInfo, mockNetworkInfo);
+
+            // Stale NetworkCallback arrives
+            ExtendedMockito.doReturn(true)
+                    .when(() -> NonSdkApiWrapper.isPrimary(mMockWifiInfo));
+            entry.onNetworkCapabilitiesChanged(mMockNetwork, mMockNetworkCapabilities);
+
+            // Stale NetworkCallback should be ignored and the network should remain disconnected.
+            assertThat(entry.getConnectedState()).isEqualTo(CONNECTED_STATE_DISCONNECTED);
+            assertThat(entry.isPrimaryNetwork()).isFalse();
         } finally {
             session.finishMocking();
         }
